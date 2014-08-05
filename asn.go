@@ -33,17 +33,9 @@ type ASN struct {
 	name    string
 	rxer    [pdu.NpduIds]Rxer
 	black   blackPDU
-	Count   Count
 	version uint8
 	state   uint8
 }
-
-type Count struct {
-	Rx Counters
-	Tx Counters
-}
-
-type Counters [pdu.Ncounters]uint64
 
 // New Apptimist Social Network Service or App.
 func New(name string) *ASN {
@@ -106,7 +98,6 @@ Loop:
 		if len(header) >= 2 {
 			id = pdu.NormId(header[0], header[1])
 		}
-		asn.Count.Rx[id] += 1
 		if id.IsErr() {
 			asn.Ack(id, id.Err(), nil)
 		}
@@ -221,7 +212,6 @@ func (asn *ASN) Tx(vpdu pdu.PDUer, eData []byte) error {
 	}
 	pdu.Trace(asn.name, "Tx", id, vpdu, eData)
 	pdu.Trace(asn.name, "Tx", pdu.RawId, pdu.Raw(header), eData)
-	asn.Count.Tx[id] += 1
 	switch id {
 	case pdu.AckId:
 		xack, _ := vpdu.(*ack.Ack)
