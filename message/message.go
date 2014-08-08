@@ -6,11 +6,10 @@ package message
 
 import (
 	"crypto/sha512"
-	"encoding/binary"
 	"encoding/hex"
 	"github.com/apptimistco/asn/pdu"
+	"github.com/apptimistco/asn/time"
 	"github.com/apptimistco/encr"
-	"time"
 )
 
 type Id [sha512.Size]byte
@@ -21,7 +20,7 @@ type HeadRpt struct {
 }
 
 type MessageReq struct {
-	Time uint64
+	Time time.Time
 	To   encr.Pub
 	From encr.Pub
 }
@@ -41,8 +40,8 @@ func NewHeadRpt(key *encr.Pub, head *Id) *HeadRpt {
 	return &HeadRpt{Key: *key, Head: *head}
 }
 
-func NewMessageReq(time uint64, to, from *encr.Pub) *MessageReq {
-	return &MessageReq{Time: time, To: *to, From: *from}
+func NewMessageReq(to, from *encr.Pub) *MessageReq {
+	return &MessageReq{Time: time.Now(), To: *to, From: *from}
 }
 
 func (rpt *HeadRpt) Format(version uint8) []byte {
@@ -53,9 +52,7 @@ func (rpt *HeadRpt) Format(version uint8) []byte {
 
 func (req *MessageReq) Format(version uint8) []byte {
 	header := []byte{version, pdu.MessageReqId.Version(version)}
-	time := []byte{0, 0, 0, 0, 0, 0, 0, 0}
-	binary.BigEndian.PutUint64(time, req.Time)
-	header = append(header, time...)
+	header = append(header, req.Time.BigEndianUnix()...)
 	header = append(header, req.To[:]...)
 	return append(header, req.From[:]...)
 }
@@ -72,12 +69,12 @@ func (rpt *HeadRpt) Parse(header []byte) pdu.Err {
 }
 
 func (req *MessageReq) Parse(header []byte) pdu.Err {
-	i := 1 + 1
+	i, l := 1+1, 0
 	if len(header) != i+8+encr.PubSz+encr.PubSz {
 		return pdu.IlFormatErr
 	}
-	req.Time = binary.BigEndian.Uint64(header[i : i+8])
-	i += 8
+	req.Time, l = time.BigEndianUnix(header[i:])
+	i += l
 	copy(req.To[:], header[i:i+encr.PubSz])
 	i += encr.PubSz
 	copy(req.From[:], header[i:i+encr.PubSz])
@@ -89,7 +86,7 @@ func (rpt *HeadRpt) String(_ []byte) string {
 }
 
 func (req *MessageReq) String(data []byte) string {
-	s := time.Unix(int64(req.Time), 0).Format(time.RFC822Z)
+	s := req.Time.String()
 	s += " " + req.To.String()[:8] + "..."
 	s += " " + req.From.String()[:8] + "..."
 	if len(data) > 8 {

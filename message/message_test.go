@@ -8,7 +8,6 @@ import (
 	"github.com/apptimistco/asn/pdu"
 	"github.com/apptimistco/encr"
 	"os"
-	"time"
 )
 
 var out = os.Stdout
@@ -20,11 +19,10 @@ func Example() {
 	sname := "message"
 	to, _, _ := encr.NewRandomKeys()
 	from, _, _ := encr.NewRandomKeys()
-	t := uint64(time.Now().Unix())
 	data := []byte{}
 	var head Id
 
-	aMessageReq := NewMessageReq(t, to, from)
+	aMessageReq := NewMessageReq(to, from)
 	bMessageReq := pdu.New(pdu.MessageReqId)
 	bMessageReq.Parse(aMessageReq.Format(pdu.Version))
 	pdu.Trace(sname, "Rx", pdu.MessageReqId, bMessageReq, data)
