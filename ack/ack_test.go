@@ -6,22 +6,12 @@ package ack
 
 import (
 	"github.com/apptimistco/asn/pdu"
-	"os"
+	"github.com/apptimistco/asn/pdu/reflection"
+	"testing"
 )
 
-var out = os.Stdout
-
-func Example() {
-	defer pdu.TraceFlush(out)
-	pdu.TraceUnfilter(pdu.NpduIds)
-
-	sname := "ack"
-	data := []byte{}
-
-	aAck := NewAck(pdu.SessionLoginReqId, pdu.Success)
-	bAck := pdu.New(pdu.AckId)
-	bAck.Parse(aAck.Format(pdu.Version))
-	pdu.Trace(sname, "Rx", pdu.AckId, bAck, data)
-
-	// Output:
+func Test(t *testing.T) {
+	if !reflection.Check(NewAck(pdu.SessionLoginReqId, pdu.Success)) {
+		t.Fail()
+	}
 }

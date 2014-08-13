@@ -5,31 +5,18 @@
 package mark
 
 import (
-	"github.com/apptimistco/asn/pdu"
+	"github.com/apptimistco/asn/pdu/reflection"
 	"github.com/apptimistco/encr"
-	"os"
+	"testing"
 )
 
-var out = os.Stdout
-
-func Example() {
-	defer pdu.TraceFlush(out)
-	pdu.TraceUnfilter(pdu.NpduIds)
-
-	sname := "location"
+func Test(t *testing.T) {
 	key, _, _ := encr.NewRandomKeys()
-	data := []byte{}
 	var lat, lon, ele float64 = 37.619002, -122.374843, 100
 
-	aMarkReq := NewMarkReq(lat, lon, ele, Set)
-	bMarkReq := pdu.New(pdu.MarkReqId)
-	bMarkReq.Parse(aMarkReq.Format(pdu.Version))
-	pdu.Trace(sname, "Rx", pdu.MarkReqId, bMarkReq, data)
-
-	aMarkRpt := NewMarkRpt(key, lat, lon, ele)
-	bMarkRpt := pdu.New(pdu.MarkRptId)
-	bMarkRpt.Parse(aMarkRpt.Format(pdu.Version))
-	pdu.Trace(sname, "Tx", pdu.MarkRptId, bMarkRpt, data)
-
-	// Output:
+	pass := reflection.Check(NewMarkReq(lat, lon, ele, Checkin))
+	pass = pass && reflection.Check(NewMarkRpt(lat, lon, ele, key))
+	if !pass {
+		t.Fail()
+	}
 }

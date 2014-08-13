@@ -20,7 +20,9 @@ import (
 	"github.com/apptimistco/asn/session"
 	"github.com/apptimistco/auth"
 	"github.com/apptimistco/box"
+	"github.com/apptimistco/datum"
 	"github.com/apptimistco/encr"
+	"github.com/apptimistco/nbo"
 	"github.com/apptimistco/pipe"
 	"io"
 	"net"
@@ -39,7 +41,7 @@ var (
 
 	nonce *box.Nonce
 
-	zero, bsample []byte
+	bsample []byte
 
 	ErrMismatch = errors.New("Mismatch")
 )
@@ -65,8 +67,16 @@ func init() {
 		return
 	}
 	nonce, _ = box.Noncer(secAuth.Sign(srvPub[:]))
-	zero = make([]byte, asn.SizeUint64)
 	bsample, _ = hex.DecodeString("0123456789abcdef")
+	asn.Diag = out
+}
+
+func N() int {
+	n := 10 << 10
+	if testing.Short() {
+		n = 16
+	}
+	return n
 }
 
 func TestBox(t *testing.T) {
@@ -108,37 +118,43 @@ type SRVer interface {
 type echoApp struct {
 	asn  *asn.ASN
 	done chan error
-	i, n uint64
+	i, n int
 }
 
 func (app *echoApp) Handler(conn net.Conn) {
 	defer conn.Close()
 	app.asn.SetBox(newAppBox())
 	app.asn.SetConn(conn)
-	app.asn.Tx(echo.NewEcho(0), zero)
-	err := app.asn.RxUntilErr()
-	app.Return(err)
+	zero := []byte{0, 0, 0, 0, 0, 0, 0, 0}
+	app.asn.Tx(echo.NewEcho(echo.Request), zero)
+	app.Return(app.asn.UntilQuit())
 }
 
 func (app *echoApp) Return(err error) {
 	app.done <- err
 }
 
-func (app *echoApp) echo(vpdu pdu.PDUer, data []byte) error {
+func (app *echoApp) echo(vpdu pdu.PDUer, rxdata *datum.Datum) (err error) {
 	xecho, ok := vpdu.(*echo.Echo)
 	if !ok {
-		return pdu.ErrParse
+		err = pdu.ErrParse
+		return
 	}
-	if seq := binary.BigEndian.Uint64(data); seq != app.i {
-		app.asn.Tx(session.NewQuitReq(), []byte{})
+	var seq uint64
+	if _, err = (nbo.Reader{rxdata}).ReadNBO(&seq); err != nil {
+		return
+	}
+	if seq != uint64(app.i) {
+		app.asn.Tx(session.NewQuitReq(), nil)
 		return ErrMismatch
-	} else if seq == app.n {
-		app.asn.Tx(session.NewQuitReq(), []byte{})
+	} else if seq == uint64(app.n) {
+		app.asn.Tx(session.NewQuitReq(), nil)
 	} else {
 		app.i += 1
-		binary.BigEndian.PutUint64(data, app.i)
+		ibuf := []byte{0, 0, 0, 0, 0, 0, 0, 0}
+		binary.BigEndian.PutUint64(ibuf, uint64(app.i))
 		xecho.Reply = echo.Request
-		app.asn.Tx(xecho, data)
+		app.asn.Tx(xecho, ibuf)
 	}
 	return nil
 }
@@ -170,8 +186,7 @@ func (srv *echoSrv) Handler(conn net.Conn) {
 		srv.asn.SetBox(box.New(2, nonce, appPub, srvPub, srvSec))
 	}
 	srv.asn.SetConn(conn)
-	err := srv.asn.RxUntilErr()
-	srv.Return(err)
+	srv.Return(srv.asn.UntilQuit())
 }
 
 func (srv *echoSrv) Return(err error) {
@@ -180,86 +195,70 @@ func (srv *echoSrv) Return(err error) {
 
 func (srv *echoSrv) Wait() error { return <-srv.done }
 
+func egress(t *testing.T, err error) {
+	if err != nil && err != io.EOF {
+		t.Error(err)
+		pdu.TraceFlush(out)
+	} else if testing.Verbose() {
+		pdu.TraceFlush(out)
+	}
+}
+
 func TestPipeEcho(t *testing.T) {
-	defer pdu.TraceFlush(out)
 	pdu.TraceUnfilter(pdu.EchoId)
-
-	var err error
-	defer func() {
-		if err != nil && err != io.EOF {
-			t.Error(err)
-		}
-	}()
-
-	app := &echoApp{n: iterations(), done: make(chan error)}
+	app := &echoApp{n: N(), done: make(chan error)}
 	srv := &echoSrv{done: make(chan error)}
 	app.asn = asn.New("PipeEchoApp")
+	defer app.asn.Close()
 	app.asn.Register(pdu.EchoId, app.echo)
 	srv.asn = asn.New("PipeEchoSrv")
+	defer srv.asn.Close()
 	appConn, srvConn := pipe.New(4 << 10)
 	go srv.Handler(srvConn)
 	go app.Handler(appConn)
-	err = wait(app, srv)
+	egress(t, wait(app, srv))
 }
 
 func TestUnixEcho(t *testing.T) {
-	defer pdu.TraceFlush(out)
 	pdu.TraceUnfilter(pdu.EchoId)
 	pdu.TraceResize(64)
-
-	var err error
-	defer func() {
-		if err != nil && err != io.EOF {
-			t.Error(err)
-		}
-	}()
-
-	app := &echoApp{n: iterations(), done: make(chan error)}
+	app := &echoApp{n: N(), done: make(chan error)}
 	srv := &echoSrv{done: make(chan error)}
 	app.asn = asn.New("UnixEchoApp")
+	defer app.asn.Close()
 	app.asn.Register(pdu.EchoId, app.echo)
 	srv.asn = asn.New("UnixEchoSrv")
-	err = netTest(app, srv, "unix", "asn.sock")
+	defer srv.asn.Close()
+	egress(t, netTest(app, srv, "unix", "asn.sock"))
 }
 
 func TestTCPEcho(t *testing.T) {
-	defer pdu.TraceFlush(out)
 	pdu.TraceUnfilter(pdu.EchoId)
 	pdu.TraceResize(16)
-
-	var err error
-	defer func() {
-		if err != nil && err != io.EOF {
-			t.Error(err)
-		}
-	}()
-
-	app := &echoApp{n: iterations(), done: make(chan error)}
+	app := &echoApp{n: N(), done: make(chan error)}
 	srv := &echoSrv{done: make(chan error)}
 	app.asn = asn.New("TCPEchoApp")
+	defer app.asn.Close()
 	app.asn.Register(pdu.EchoId, app.echo)
 	srv.asn = asn.New("TCPEchoSrv")
-	err = netTest(app, srv, "tcp", "localhost:6060")
+	defer srv.asn.Close()
+	egress(t, netTest(app, srv, "tcp", "localhost:6060"))
 }
 
 func TestWebEcho(t *testing.T) {
-	defer pdu.TraceFlush(out)
+	var err error
+	defer func() { egress(t, err) }()
+
 	pdu.TraceUnfilter(pdu.EchoId)
 	pdu.TraceResize(32)
-
-	var err error
-	defer func() {
-		if err != nil && err != io.EOF {
-			t.Error(err)
-		}
-	}()
-
 	path := "/ws/asn"
-	app := &echoApp{n: iterations(), done: make(chan error)}
+	app := &echoApp{n: N(), done: make(chan error)}
 	srv := &echoSrv{done: make(chan error)}
 	app.asn = asn.New("WebEchoApp")
+	defer app.asn.Close()
 	app.asn.Register(pdu.EchoId, app.echo)
 	srv.asn = asn.New("WebEchoSrv")
+	defer srv.asn.Close()
 	http.Handle(path, websocket.Handler(func(ws *websocket.Conn) {
 		srv.Handler(ws)
 	}))
@@ -279,13 +278,6 @@ func TestWebEcho(t *testing.T) {
 	}
 	go app.Handler(appConn)
 	err = wait(app, srv)
-}
-
-func iterations() uint64 {
-	if testing.Short() {
-		return uint64(16)
-	}
-	return uint64(16 << 10)
 }
 
 func netTest(app APPer, srv SRVer, stream, addr string) error {

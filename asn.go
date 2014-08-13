@@ -5,15 +5,23 @@
 package asn
 
 import (
-	"encoding/binary"
+	"fmt"
 	"github.com/apptimistco/asn/ack"
 	"github.com/apptimistco/asn/echo"
 	"github.com/apptimistco/asn/pdu"
 	"github.com/apptimistco/box"
+	"github.com/apptimistco/datum"
+	"github.com/apptimistco/nbo"
+	"github.com/apptimistco/yab"
 	"io"
+	"io/ioutil"
 	"net"
 	"sync"
 	"time"
+)
+
+var (
+	Diag = ioutil.Discard
 )
 
 const connTO = 200 * time.Millisecond
@@ -25,31 +33,58 @@ const (
 	quitting
 )
 
-type Rxer func(pdu.PDUer, []byte) error
+type Rxer func(pdu.PDUer, *datum.Datum) error
 
-var noopRx Rxer = func(_ pdu.PDUer, _ []byte) error { return nil }
+var noopRx Rxer = func(_ pdu.PDUer, _ *datum.Datum) error { return nil }
 
 type ASN struct {
-	name    string
-	rxer    [pdu.NpduIds]Rxer
-	black   blackPDU
-	version uint8
-	state   uint8
+	// Name of session prefaced to trace logs and diagnostics.
+	Name string
+	// PDU receivers
+	rxer [pdu.NpduIds]Rxer
+	// Need to lock Tx but UntilQuit is single threaded
+	mutex *sync.Mutex
+	// Version adapts to peer
+	// State may be { undefined, established, suspended, quitting }
+	version, state uint8
+	// Receive data
+	rxdata *datum.Datum
+	// Opened/Sealed Rx/Tx Header Buffers
+	orhbuf, othbuf, srhbuf, sthbuf *yab.Buffer
+	// Keys to Open/Seal Header Buffers
+	box *box.Box
+	// Channels to interrupt Conn Read/Write
+	rstop chan error
+	wstop chan error
+	conn  net.Conn
 }
 
 // New Apptimist Social Network Service or App.
 func New(name string) *ASN {
 	asn := &ASN{
-		name:    name,
+		Name:    name,
 		version: pdu.Version,
 	}
 	asn.Register(pdu.SessionPauseReqId, noopRx)
 	asn.Register(pdu.SessionResumeReqId, noopRx)
-	asn.black.red.rstop = make(chan error)
-	asn.black.red.wstop = make(chan error)
-	asn.black.red.rmutex = new(sync.Mutex)
-	asn.black.red.wmutex = new(sync.Mutex)
+	asn.mutex = new(sync.Mutex)
+	asn.rxdata, _ = datum.Open("")
+	asn.orhbuf = yab.New()
+	asn.othbuf = yab.New()
+	asn.srhbuf = yab.New()
+	asn.sthbuf = yab.New()
+	asn.rstop = make(chan error)
+	asn.wstop = make(chan error)
 	return asn
+}
+
+func (asn *ASN) Close() error {
+	asn.rxdata.Close()
+	asn.orhbuf.Close()
+	asn.othbuf.Close()
+	asn.srhbuf.Close()
+	asn.sthbuf.Close()
+	return nil
 }
 
 // Register a creator for the given id.
@@ -61,57 +96,60 @@ func (asn *ASN) Register(id pdu.Id, rx Rxer) {
 
 // Preempt PDU Rx & Tx.
 func (asn *ASN) Preempt() {
-	asn.black.red.rstop <- io.EOF
-	asn.black.red.wstop <- io.EOF
+	asn.rstop <- io.ErrUnexpectedEOF
+	asn.wstop <- io.ErrUnexpectedEOF
 }
 
-func (asn *ASN) Ack(id pdu.Id, e pdu.Err, data []byte) {
+// Ack the given PDU Id. On an error with nil data, include the error string.
+func (asn *ASN) Ack(id pdu.Id, e pdu.Err, vdata interface{}) {
 	if id != pdu.AckId { // don't ack an Ack
-		if data == nil {
-			data = []byte{}
-			if e != pdu.Success && uint(e) < pdu.Nerrors {
-				err := pdu.Errors[e]
-				if err != nil {
-					data = []byte(err.Error())
+		if e != pdu.Success && uint(e) < pdu.Nerrors {
+			if vdata == nil {
+				if err := pdu.Errors[e]; err != nil {
+					vdata = err.Error()
 				}
 			}
 		}
-		asn.Tx(ack.NewAck(id, e), data)
+		asn.Tx(ack.NewAck(id, e), vdata)
 	}
 }
 
 // RxUntilErr receives, decrypts, parses and processes ASN PDUs
 // through registered receivers until and acknowledged QuitReq
 // or error. This may be killed with asn.Preempt()
-func (asn *ASN) RxUntilErr() error {
+func (asn *ASN) UntilQuit() (err error) {
+	defer func() {
+		if err != nil && err != io.EOF {
+			fmt.Fprintln(Diag, asn.Name, "UntilQuit:", err)
+		}
+	}()
 Loop:
 	for {
-		header, eData, err := asn.black.rx()
-		if err != nil {
-			return err
+		if err = asn.rxOpen(); err != nil {
+			return
 		}
-		pdu.Trace(asn.name, "Rx", pdu.RawId, pdu.Raw(header), eData)
-		if header[0] < asn.version {
-			asn.version = header[0]
-		}
+		pdu.Trace(pdu.RawId, asn.Name, "Rx", pdu.RawId, asn.orhbuf)
 		id := pdu.ShortId
-		if len(header) >= 2 {
-			id = pdu.NormId(header[0], header[1])
+		if len(asn.orhbuf.Buf) >= 2 {
+			id = pdu.NormId(asn.orhbuf.Buf[0], asn.orhbuf.Buf[1])
 		}
 		if id.IsErr() {
 			asn.Ack(id, id.Err(), nil)
+		}
+		if asn.orhbuf.Buf[0] < asn.version {
+			asn.version = asn.orhbuf.Buf[0]
 		}
 		vpdu := pdu.New(id)
 		if vpdu == nil {
 			asn.Ack(id, pdu.UnknownErr, nil)
 			continue Loop
 		}
-		e := vpdu.Parse(header)
+		e := vpdu.Parse(asn.orhbuf)
 		if e != pdu.Success {
 			asn.Ack(id, e, nil)
 			continue Loop
 		}
-		pdu.Trace(asn.name, "Rx", id, vpdu, eData)
+		pdu.Trace(id, asn.Name, "Rx", id, vpdu)
 		rxer := asn.rxer[id]
 		switch id {
 		// The do nothing cases bypass the default state check.
@@ -140,7 +178,7 @@ Loop:
 				xecho, _ := vpdu.(*echo.Echo)
 				if xecho.Reply == echo.Request {
 					xecho.Reply = echo.Reply
-					asn.Tx(xecho, eData)
+					asn.Tx(xecho, asn.rxdata)
 					continue Loop
 				}
 			}
@@ -166,7 +204,7 @@ Loop:
 		}
 		if rxer == nil {
 			asn.Ack(id, pdu.UnsupportedErr, nil)
-		} else if err = rxer(vpdu, eData); err != nil {
+		} else if err = rxer(vpdu, asn.rxdata); err != nil {
 			for i, e := range pdu.Errors {
 				if e == err {
 					asn.Ack(id, pdu.Err(i), nil)
@@ -180,22 +218,80 @@ Loop:
 	}
 }
 
-func (asn *ASN) SetBox(box *box.Box)   { asn.black.box = box }
-func (asn *ASN) SetConn(conn net.Conn) { asn.black.red.conn = conn }
+// rxOpen receives the PDU then opens its encrypted header.
+func (asn *ASN) rxOpen() (err error) {
+	var l uint64
+	if _, err = (nbo.Reader{asn}).ReadNBO(&l); err != nil {
+		return
+	}
+	hlen := l >> 48
+	dlen := l & 0xffffffffffff
+	if int(hlen) > cap(asn.srhbuf.Buf) {
+		asn.rxdata.Reset()
+		asn.rxdata.Limit(int64(dlen))
+		asn.rxdata.ReadFrom(asn)
+		asn.rxdata.Reset()
+		err = yab.ErrTooLarge
+		return
+	}
+	asn.srhbuf.Limit(int64(hlen))
+	if _, err = asn.srhbuf.ReadFrom(asn); err != nil {
+		return
+	}
+	if dlen > 0 {
+		asn.rxdata.Reset()
+		asn.rxdata.Limit(int64(dlen))
+		_, err = asn.rxdata.ReadFrom(asn)
+		if err != nil {
+			return err
+		}
+	}
+	asn.orhbuf.Reset()
+	asn.orhbuf.Buf, err = asn.box.Open(asn.orhbuf.Buf, asn.srhbuf.Buf)
+	return
+}
+
+// Read full buffer unless preempted.
+func (asn *ASN) Read(b []byte) (n int, err error) {
+	for i := 0; n < len(b); n += i {
+		asn.conn.SetReadDeadline(time.Now().Add(connTO))
+		select {
+		case err = <-asn.rstop:
+			return
+		default:
+			i, err = asn.conn.Read(b[n:])
+			if err != nil {
+				eto, ok := err.(net.Error)
+				if !ok || !eto.Timeout() {
+					return
+				}
+				err = nil
+			}
+		}
+	}
+	return
+}
+
+func (asn *ASN) SetBox(box *box.Box)   { asn.box = box }
+func (asn *ASN) SetConn(conn net.Conn) { asn.conn = conn }
 
 // Format, box, then send a PDU.
-func (asn *ASN) Tx(vpdu pdu.PDUer, eData []byte) error {
-	header := vpdu.Format(asn.version)
+func (asn *ASN) Tx(vpdu pdu.PDUer, vdata interface{}) (err error) {
+	asn.mutex.Lock()
 	defer func() {
-		header = header[:0]
+		asn.mutex.Unlock()
+		if err != nil && err != io.EOF {
+			fmt.Fprintln(Diag, asn.Name, "Tx:", err)
+		}
 	}()
-	id := pdu.NormId(header[0], header[1])
+	asn.othbuf.Reset()
+	vpdu.Format(asn.version, asn.othbuf)
+	id := vpdu.Id()
 	switch asn.state {
 	case quitting:
 		return pdu.ErrUnexpected
 	case suspended:
-		if id != pdu.SessionResumeReqId &&
-			id != pdu.SessionQuitReqId {
+		if id != pdu.SessionResumeReqId && id != pdu.SessionQuitReqId {
 			return pdu.ErrSuspended
 		}
 	default:
@@ -207,11 +303,11 @@ func (asn *ASN) Tx(vpdu pdu.PDUer, eData []byte) error {
 			return pdu.ErrUnexpected
 		}
 	}
-	if err := asn.black.tx(header, eData); err != nil {
-		return err
+	if err = asn.sealTx(vdata); err != nil {
+		return
 	}
-	pdu.Trace(asn.name, "Tx", id, vpdu, eData)
-	pdu.Trace(asn.name, "Tx", pdu.RawId, pdu.Raw(header), eData)
+	pdu.Trace(id, asn.Name, "Tx", id, vpdu)
+	pdu.Trace(pdu.RawId, asn.Name, "Tx", pdu.RawId, asn.othbuf)
 	switch id {
 	case pdu.AckId:
 		xack, _ := vpdu.(*ack.Ack)
@@ -232,104 +328,34 @@ func (asn *ASN) Tx(vpdu pdu.PDUer, eData []byte) error {
 	case pdu.SessionQuitReqId:
 		asn.state = quitting
 	}
-	return nil
-}
-
-type blackPDU struct {
-	box *box.Box
-	red redPDU
-}
-
-// Read encrypted header and data then decrypt header.
-func (black blackPDU) rx() (header, eData []byte, err error) {
-	eHeader, eData, err := black.red.rx()
-	if err != nil {
-		return nil, nil, err
-	}
-	header, err = black.box.Open(nil, eHeader)
-	if err != nil {
-		return nil, nil, err
-	}
 	return
 }
 
-// Encrypt header then transmit PDU.
-func (black blackPDU) tx(header, eData []byte) error {
-	eHeader, err := black.box.Seal(nil, header)
+// sealTx seals the header then transmits the PDU.
+func (asn *ASN) sealTx(vdata interface{}) (err error) {
+	asn.sthbuf.Reset()
+	asn.sthbuf.Buf, err = asn.box.Seal(asn.sthbuf.Buf, asn.othbuf.Buf)
 	if err != nil {
 		return err
 	}
-	return black.red.tx(eHeader, eData)
-}
-
-type redPDU struct {
-	rstop, wstop   chan error
-	rmutex, wmutex *sync.Mutex
-
-	conn net.Conn
-}
-
-// Received encrypted header and data prefaced by respective lenghts.
-func (red redPDU) rx() (eHeader, eData []byte, err error) {
-	red.rmutex.Lock()
-	defer red.rmutex.Unlock()
-	red.conn.SetReadDeadline(time.Now().Add(connTO))
-	lbuf := []byte{0, 0, 0, 0, 0, 0, 0, 0}
-	err = red.read(lbuf)
-	if err != nil {
-		return nil, nil, err
+	l := uint64(len(asn.sthbuf.Buf)) << 48
+	switch t := vdata.(type) {
+	case *datum.Datum:
+		l |= uint64(t.Len())
+	case string:
+		l |= uint64(len(t))
+	case []byte:
+		l |= uint64(len(t))
 	}
-	hlen := binary.BigEndian.Uint32(lbuf[0:4])
-	dlen := binary.BigEndian.Uint32(lbuf[4:])
-	eHeader = make([]byte, hlen)
-	if err = red.read(eHeader); err != nil {
-		eHeader = eHeader[:0]
-		return nil, nil, err
-	}
-	if dlen > 0 {
-		eData = make([]byte, dlen)
-		if err = red.read(eData); err != nil {
-			eHeader = eHeader[:0]
-			eData = eData[:0]
-			return nil, nil, err
-		}
-	}
-	return
-}
-
-// Transmit encrypted header and data prefaced by respective lenghts.
-func (red redPDU) tx(eHeader, eData []byte) error {
-	red.wmutex.Lock()
-	defer red.wmutex.Unlock()
-	red.conn.SetWriteDeadline(time.Now().Add(connTO))
-	lbuf := []byte{0, 0, 0, 0, 0, 0, 0, 0}
-	binary.BigEndian.PutUint32(lbuf[0:4], uint32(len(eHeader)))
-	binary.BigEndian.PutUint32(lbuf[4:], uint32(len(eData)))
-	err := red.write(lbuf)
-	if err == nil {
-		if err = red.write(eHeader); err == nil {
-			if len(eData) > 0 {
-				err = red.write(eData)
-			}
-		}
-	}
-	return err
-}
-
-// Read full buffer unless preempted.
-func (red redPDU) read(b []byte) (err error) {
-	for i, n := 0, 0; i < len(b); i += n {
-		select {
-		case err = <-red.rstop:
-			return
-		default:
-			n, err = red.conn.Read(b[i:])
-			if err != nil {
-				eto, ok := err.(net.Error)
-				if !ok || !eto.Timeout() {
-					return
-				}
-				err = nil
+	if _, err = (nbo.Writer{asn}).WriteNBO(l); err == nil {
+		if _, err = asn.sthbuf.WriteTo(asn); err == nil {
+			switch t := vdata.(type) {
+			case *datum.Datum:
+				_, err = t.WriteTo(asn)
+			case string:
+				_, err = asn.Write([]byte(t))
+			case []byte:
+				_, err = asn.Write(t)
 			}
 		}
 	}
@@ -337,13 +363,14 @@ func (red redPDU) read(b []byte) (err error) {
 }
 
 // Write full buffer unless preempted.
-func (red redPDU) write(b []byte) (err error) {
-	for i, n := 0, 0; i < len(b); i += n {
+func (asn *ASN) Write(b []byte) (n int, err error) {
+	for i := 0; n < len(b); n += i {
+		asn.conn.SetWriteDeadline(time.Now().Add(connTO))
 		select {
-		case err = <-red.wstop:
+		case err = <-asn.wstop:
 			return
 		default:
-			n, err = red.conn.Write(b[i:])
+			i, err = asn.conn.Write(b[n:])
 			if err != nil {
 				eto, ok := err.(net.Error)
 				if !ok || !eto.Timeout() {

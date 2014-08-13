@@ -4,10 +4,7 @@
 
 package pdu
 
-import (
-	"encoding/hex"
-	"errors"
-)
+import "errors"
 
 const (
 	RawId Id = iota
@@ -324,12 +321,21 @@ func (id Id) Version(version uint8) byte {
 	}[i]
 }
 
+// Header is an interface wrapper for the PDU header buffer.
+type Header interface {
+	Read([]byte) (int, error)
+	Write([]byte) (int, error)
+	Len() int
+	Next(int) []byte
+}
+
 // PDUer is an interface wrapper for each PDU type providing format, parse and
 // trace methods.
 type PDUer interface {
-	Format(uint8) []byte
-	Parse([]byte) Err
-	String([]byte) string // reformat PDU and data as log friendly string
+	Format(uint8, Header)
+	Id() Id
+	Parse(Header) Err
+	String() string // format PDU as log friendly string
 }
 
 type Creator func() PDUer
@@ -353,15 +359,27 @@ func New(id Id) PDUer {
 	return nil
 }
 
-// pseudo PDU type for raw traces
-type Raw []byte
-
-func (pdu Raw) Format(_ uint8) []byte { return nil }
-func (pdu Raw) Parse(_ []byte) Err    { return Success }
-func (pdu Raw) String(data []byte) string {
-	s := hex.EncodeToString(data)
-	if len(s) > 64 {
-		return RawId.String() + " " + s[:64] + "...\n"
+// Getc returns the next character (byte) read from the Header buffer.
+func Getc(h Header) byte {
+	buf := []byte{0}
+	if n, err := h.Read(buf); err != nil && n != len(buf) {
+		panic("short")
 	}
-	return RawId.String() + " " + s + "\n"
+	return buf[0]
+}
+
+// Ngets returns a string of the requested length read from the Header bufer.
+func Ngets(h Header, n int) string {
+	if n == 0 {
+		return ""
+	}
+	sbuf := make([]byte, n)
+	defer func() {
+		sbuf = sbuf[:0]
+		sbuf = nil
+	}()
+	if i, err := h.Read(sbuf); err != nil || i != n {
+		return ""
+	}
+	return string(sbuf)
 }

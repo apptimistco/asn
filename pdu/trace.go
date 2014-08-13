@@ -35,19 +35,23 @@ func init() {
 	Register(TraceReqId, func() PDUer { return &TraceReq{} })
 }
 
-// Trace provides a filtered and formatted PDU log ring.
-// Name is usally the session user name.
-// Rxtx shoul be either "Rx" or "Tx".
-func Trace(name, rxtx string, id Id, v PDUer, data []byte) {
+// Println formats the given operands with space separation to the log ring.
+func Println(a ...interface{}) (n int, err error) {
+	ringMutex.Lock()
+	defer ringMutex.Unlock()
+	ring[ringIndex] = fmt.Sprintln(a...)
+	n = len(ring[ringIndex])
+	ringIndex += 1
+	if ringIndex == ringSize {
+		ringIndex = 0
+	}
+	return
+}
+
+// Trace provides filtered println to log ring.
+func Trace(id Id, v ...interface{}) {
 	if id < NpduIds && unfilter[id] {
-		ringMutex.Lock()
-		defer ringMutex.Unlock()
-		ring[ringIndex] = fmt.Sprintln(name, rxtx, id.String(),
-			v.String(data))
-		ringIndex += 1
-		if ringIndex == ringSize {
-			ringIndex = 0
-		}
+		Println(v...)
 	}
 }
 
@@ -79,7 +83,10 @@ type WriteStringer interface {
 // TraceFlush writes; then empties the trace ring buffer.
 func TraceFlush(out WriteStringer) {
 	ringMutex.Lock()
-	defer ringMutex.Unlock()
+	defer func() {
+		ringIndex = 0
+		ringMutex.Unlock()
+	}()
 	for i, s := range append(ring[ringIndex+1:], ring[:ringIndex]...) {
 		if len(s) != 0 {
 			out.WriteString(s)
@@ -115,7 +122,7 @@ func NewTraceReq(cmd, arg uint8) *TraceReq {
 	return &TraceReq{Cmd: cmd, Arg: arg}
 }
 
-func (req *TraceReq) Format(version uint8) []byte {
+func (req *TraceReq) Format(version uint8, h Header) {
 	var arg uint8
 	switch req.Cmd {
 	case TraceReqFilter, TraceReqUnfilter:
@@ -124,19 +131,25 @@ func (req *TraceReq) Format(version uint8) []byte {
 	case TraceReqResize:
 		arg = req.Arg
 	}
-	return []byte{version, TraceReqId.Version(version), req.Cmd, arg}
+	h.Write([]byte{version,
+		TraceReqId.Version(version),
+		req.Cmd,
+		arg})
 }
 
-func (req *TraceReq) Parse(header []byte) Err {
-	if len(header) < 1+1+1+1 {
+func (req *TraceReq) Id() Id { return TraceReqId }
+
+func (req *TraceReq) Parse(h Header) Err {
+	buf := []byte{0, 0, 0, 0}
+	if n, err := h.Read(buf); err != nil || n != len(buf) {
 		return IlFormatErr
 	}
-	req.Cmd = header[2]
-	req.Arg = header[3]
+	req.Cmd = buf[2]
+	req.Arg = buf[3]
 	return Success
 }
 
-func (req *TraceReq) String(data []byte) string {
+func (req *TraceReq) String() string {
 	switch req.Cmd {
 	case TraceReqFilter:
 		return "Filter " + Id(req.Arg).String()

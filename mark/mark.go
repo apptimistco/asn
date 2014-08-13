@@ -5,11 +5,10 @@
 package mark
 
 import (
-	"encoding/binary"
 	"fmt"
 	"github.com/apptimistco/asn/pdu"
 	"github.com/apptimistco/encr"
-	"math"
+	"github.com/apptimistco/nbo"
 )
 
 const (
@@ -30,9 +29,9 @@ type MarkReq struct {
 }
 
 type MarkRpt struct {
-	Key encr.Pub
-
 	Lat, Lon, Ele float64
+
+	Key encr.Pub
 }
 
 func init() {
@@ -48,67 +47,70 @@ func NewMarkReq(lat, lon, z float64, cmd uint8) *MarkReq {
 	return &MarkReq{Lat: lat, Lon: lon, Z: z, Cmd: cmd}
 }
 
-func NewMarkRpt(key *encr.Pub, lat, lon, ele float64) *MarkRpt {
+func NewMarkRpt(lat, lon, ele float64, key *encr.Pub) *MarkRpt {
 	return &MarkRpt{Key: *key, Lat: lat, Lon: lon, Ele: ele}
 }
 
-func (req *MarkReq) Format(version uint8) []byte {
-	header := []byte{version, pdu.MarkReqId.Version(version)}
-	for _, f := range [3]float64{req.Lat, req.Lon, req.Z} {
-		bytes := []byte{0, 0, 0, 0, 0, 0, 0, 0}
-		binary.BigEndian.PutUint64(bytes, math.Float64bits(f))
-		header = append(header, bytes...)
-	}
-	header = append(header, req.Cmd)
-	return header
+func (req *MarkReq) Format(version uint8, h pdu.Header) {
+	h.Write([]byte{version, pdu.MarkReqId.Version(version)})
+	(nbo.Writer{h}).WriteNBO(req.Lat)
+	(nbo.Writer{h}).WriteNBO(req.Lon)
+	(nbo.Writer{h}).WriteNBO(req.Z)
+	(nbo.Writer{h}).WriteNBO(req.Cmd)
 }
 
-func (rsp *MarkRpt) Format(version uint8) []byte {
-	header := []byte{version, pdu.MarkRptId.Version(version)}
-	header = append(header, rsp.Key[:]...)
-	for _, f := range [3]float64{rsp.Lat, rsp.Lon, rsp.Ele} {
-		bytes := []byte{0, 0, 0, 0, 0, 0, 0, 0}
-		binary.BigEndian.PutUint64(bytes, math.Float64bits(f))
-		header = append(header, bytes...)
-	}
-	return header
+func (rpt *MarkRpt) Format(version uint8, h pdu.Header) {
+	h.Write([]byte{version, pdu.MarkRptId.Version(version)})
+	(nbo.Writer{h}).WriteNBO(rpt.Lat)
+	(nbo.Writer{h}).WriteNBO(rpt.Lon)
+	(nbo.Writer{h}).WriteNBO(rpt.Ele)
+	h.Write(rpt.Key[:])
 }
 
-func (req *MarkReq) Parse(header []byte) pdu.Err {
-	i := 1 + 1
-	if len(header) != i+(3*8)+1 {
+func (req *MarkReq) Id() pdu.Id { return pdu.MarkReqId }
+func (req *MarkRpt) Id() pdu.Id { return pdu.MarkRptId }
+
+func (req *MarkReq) Parse(h pdu.Header) pdu.Err {
+	if h.Len() != 1+1+(3*8)+1 {
 		return pdu.IlFormatErr
 	}
-	for _, pf := range [3]*float64{&req.Lat, &req.Lon, &req.Z} {
-		bits := binary.BigEndian.Uint64(header[i : i+8])
-		*pf = math.Float64frombits(bits)
-		i += 8
+	h.Next(2)
+	for _, pf := range []*float64{&req.Lat, &req.Lon, &req.Z} {
+		if n, err := (nbo.Reader{h}).ReadNBO(pf); err != nil || n != 8 {
+			return pdu.IlFormatErr
+		}
 	}
-	req.Cmd = header[i]
-	return pdu.Success
-}
-
-func (rsp *MarkRpt) Parse(header []byte) pdu.Err {
-	i := 1 + 1
-	if len(header) != i+encr.PubSz+(3*8) {
+	if n, err := (nbo.Reader{h}).ReadNBO(&req.Cmd); err != nil || n != 1 {
 		return pdu.IlFormatErr
-	}
-	copy(rsp.Key[:], header[i:i+encr.PubSz])
-	i += encr.PubSz
-	for _, pf := range [3]*float64{&rsp.Lat, &rsp.Lon, &rsp.Ele} {
-		bits := binary.BigEndian.Uint64(header[i : i+8])
-		*pf = math.Float64frombits(bits)
-		i += 8
 	}
 	return pdu.Success
 }
 
-func (req *MarkReq) String(_ []byte) string {
+func (rpt *MarkRpt) Parse(h pdu.Header) pdu.Err {
+	if h.Len() != 1+1+encr.PubSz+(3*8) {
+		return pdu.IlFormatErr
+	}
+	h.Next(2)
+	for _, pf := range [3]*float64{&rpt.Lat, &rpt.Lon, &rpt.Ele} {
+		if n, err := (nbo.Reader{h}).ReadNBO(pf); err != nil || n != 8 {
+			return pdu.IlFormatErr
+		}
+	}
+	if n, err := h.Read(rpt.Key[:]); err != nil || n != encr.PubSz {
+		return pdu.IlFormatErr
+	}
+	return pdu.Success
+}
+
+func (req *MarkReq) String() string {
 	i := req.Cmd
 	if i > Ncommands {
 		i = Ncommands
 	}
-	return fmt.Sprintf("%s %f %f %f",
+	return fmt.Sprintf("%f %f %f %s",
+		req.Lat,
+		req.Lon,
+		req.Z,
 		[Ncommands + 1]string{Set: "Set",
 			Unset:     "Unset",
 			Checkin:   "Checkin",
@@ -116,16 +118,13 @@ func (req *MarkReq) String(_ []byte) string {
 			Scan:      "Scan",
 			Stop:      "Stop",
 			Ncommands: "invalid",
-		}[i],
-		req.Lat,
-		req.Lon,
-		req.Z)
+		}[i])
 }
 
-func (rsp *MarkRpt) String(_ []byte) string {
-	return fmt.Sprintf("%s... %f %f %f",
-		rsp.Key.String()[:8],
+func (rsp *MarkRpt) String() string {
+	return fmt.Sprintf("%f %f %f %s...",
 		rsp.Lat,
 		rsp.Lon,
-		rsp.Ele)
+		rsp.Ele,
+		rsp.Key.String()[:8])
 }

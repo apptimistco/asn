@@ -10,6 +10,7 @@ import (
 	"github.com/apptimistco/asn/pdu"
 	"github.com/apptimistco/asn/time"
 	"github.com/apptimistco/encr"
+	"github.com/apptimistco/nbo"
 )
 
 type Id [sha512.Size]byte
@@ -44,56 +45,61 @@ func NewMessageReq(to, from *encr.Pub) *MessageReq {
 	return &MessageReq{Time: time.Now(), To: *to, From: *from}
 }
 
-func (rpt *HeadRpt) Format(version uint8) []byte {
-	header := []byte{version, pdu.HeadRptId.Version(version)}
-	header = append(header, rpt.Key[:]...)
-	return append(header, rpt.Head[:]...)
+func (rpt *HeadRpt) Format(version uint8, h pdu.Header) {
+	h.Write([]byte{version, pdu.HeadRptId.Version(version)})
+	h.Write(rpt.Key[:])
+	h.Write(rpt.Head[:])
 }
 
-func (req *MessageReq) Format(version uint8) []byte {
-	header := []byte{version, pdu.MessageReqId.Version(version)}
-	header = append(header, req.Time.BigEndianUnix()...)
-	header = append(header, req.To[:]...)
-	return append(header, req.From[:]...)
+func (req *MessageReq) Format(version uint8, h pdu.Header) {
+	h.Write([]byte{version, pdu.MessageReqId.Version(version)})
+	(nbo.Writer{h}).WriteNBO(uint64(req.Time.Unix()))
+	h.Write(req.To[:])
+	h.Write(req.From[:])
 }
 
-func (rpt *HeadRpt) Parse(header []byte) pdu.Err {
-	i := 1 + 1
-	if len(header) != i+encr.PubSz+sha512.Size {
+func (req *HeadRpt) Id() pdu.Id    { return pdu.HeadRptId }
+func (req *MessageReq) Id() pdu.Id { return pdu.MessageReqId }
+
+func (rpt *HeadRpt) Parse(h pdu.Header) pdu.Err {
+	if h.Len() != 1+1+encr.PubSz+sha512.Size {
 		return pdu.IlFormatErr
 	}
-	copy(rpt.Key[:], header[i:i+encr.PubSz])
-	i += encr.PubSz
-	copy(rpt.Head[:], header[i:])
+	h.Next(2)
+	if n, err := h.Read(rpt.Key[:]); err != nil || n != encr.PubSz {
+		return pdu.IlFormatErr
+	}
+	if n, err := h.Read(rpt.Head[:]); err != nil || n != sha512.Size {
+		return pdu.IlFormatErr
+	}
 	return pdu.Success
 }
 
-func (req *MessageReq) Parse(header []byte) pdu.Err {
-	i, l := 1+1, 0
-	if len(header) != i+8+encr.PubSz+encr.PubSz {
+func (req *MessageReq) Parse(h pdu.Header) pdu.Err {
+	if h.Len() != 1+1+8+(2*encr.PubSz) {
 		return pdu.IlFormatErr
 	}
-	req.Time, l = time.BigEndianUnix(header[i:])
-	i += l
-	copy(req.To[:], header[i:i+encr.PubSz])
-	i += encr.PubSz
-	copy(req.From[:], header[i:i+encr.PubSz])
+	h.Next(2)
+	var u64 uint64
+	(nbo.Reader{h}).ReadNBO(&u64)
+	req.Time = time.Unix(int64(u64), 0)
+	if n, err := h.Read(req.To[:]); err != nil || n != encr.PubSz {
+		return pdu.IlFormatErr
+	}
+	if n, err := h.Read(req.From[:]); err != nil || n != encr.PubSz {
+		return pdu.IlFormatErr
+	}
 	return pdu.Success
 }
 
-func (rpt *HeadRpt) String(_ []byte) string {
+func (rpt *HeadRpt) String() string {
 	return rpt.Key.String()[:8] + "... " + rpt.Head.String()[:8] + "..."
 }
 
-func (req *MessageReq) String(data []byte) string {
+func (req *MessageReq) String() string {
 	s := req.Time.String()
 	s += " " + req.To.String()[:8] + "..."
 	s += " " + req.From.String()[:8] + "..."
-	if len(data) > 8 {
-		s += " " + hex.EncodeToString(data[:8]) + "..."
-	} else {
-		s += " " + hex.EncodeToString(data)
-	}
 	return s
 }
 

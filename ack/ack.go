@@ -19,25 +19,24 @@ func NewAck(req pdu.Id, err pdu.Err) *Ack {
 	return &Ack{Req: req, Err: err}
 }
 
-func (ack *Ack) Format(version uint8) []byte {
-	return []byte{version, pdu.AckId.Version(version),
-		ack.Req.Version(version), ack.Err.Version(version)}
+func (ack *Ack) Format(version uint8, h pdu.Header) {
+	h.Write([]byte{version, pdu.AckId.Version(version),
+		ack.Req.Version(version), ack.Err.Version(version)})
 }
 
-func (ack *Ack) Parse(header []byte) pdu.Err {
-	if l := len(header); l < 2 {
-		ack.Req = pdu.UnknownId
-		ack.Err = pdu.UnknownErr
-	} else if l < 3 {
-		ack.Req = pdu.NormId(header[0], header[2])
-		ack.Err = pdu.UnknownErr
-	} else {
-		ack.Req = pdu.NormId(header[0], header[2])
-		ack.Err = pdu.NormErr(header[0], header[3])
+func (ack *Ack) Id() pdu.Id { return pdu.AckId }
+
+func (ack *Ack) Parse(h pdu.Header) pdu.Err {
+	if h.Len() != 1+1+1+1 {
+		return pdu.IlFormatErr
 	}
+	version := pdu.Getc(h)
+	_ = pdu.Getc(h)
+	ack.Req = pdu.NormId(version, pdu.Getc(h))
+	ack.Err = pdu.NormErr(version, pdu.Getc(h))
 	return pdu.Success
 }
 
-func (ack *Ack) String(_ []byte) string {
+func (ack *Ack) String() string {
 	return ack.Req.String() + " " + ack.Err.String()
 }

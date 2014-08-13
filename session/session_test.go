@@ -5,49 +5,23 @@
 package session
 
 import (
-	"github.com/apptimistco/asn/pdu"
+	"github.com/apptimistco/asn/pdu/reflection"
 	"github.com/apptimistco/auth"
 	"github.com/apptimistco/encr"
-	"os"
+	"testing"
 )
 
-var out = os.Stdout
-
-func Example() {
-	defer pdu.TraceFlush(out)
-	pdu.TraceUnfilter(pdu.NpduIds)
-
-	sname := "session"
+func Test(t *testing.T) {
 	pubEncr, _, _ := encr.NewRandomKeys()
 	_, secAuth, _ := auth.NewRandomKeys()
 	sig := secAuth.Sign(pubEncr[:])
 	url := "ws://siren.apptimist.co/ws/asn/loc?key=" + pubEncr.String()
-	data := []byte{}
 
-	aLoginReq := NewLoginReq(pubEncr, sig)
-	bLoginReq := pdu.New(pdu.SessionLoginReqId)
-	bLoginReq.Parse(aLoginReq.Format(pdu.Version))
-	pdu.Trace(sname, "Rx", pdu.SessionLoginReqId, bLoginReq, data)
-
-	aPauseReq := NewPauseReq()
-	bPauseReq := pdu.New(pdu.SessionPauseReqId)
-	bPauseReq.Parse(aPauseReq.Format(pdu.Version))
-	pdu.Trace(sname, "Rx", pdu.SessionPauseReqId, bPauseReq, data)
-
-	aRedirectReq := NewRedirectReq(url)
-	bRedirectReq := pdu.New(pdu.SessionRedirectReqId)
-	bRedirectReq.Parse(aRedirectReq.Format(pdu.Version))
-	pdu.Trace(sname, "Rx", pdu.SessionRedirectReqId, bRedirectReq, data)
-
-	aResumeReq := NewResumeReq()
-	bResumeReq := pdu.New(pdu.SessionResumeReqId)
-	bResumeReq.Parse(aResumeReq.Format(pdu.Version))
-	pdu.Trace(sname, "Rx", pdu.SessionResumeReqId, bResumeReq, data)
-
-	aQuitReq := NewQuitReq()
-	bQuitReq := pdu.New(pdu.SessionQuitReqId)
-	bQuitReq.Parse(aQuitReq.Format(pdu.Version))
-	pdu.Trace(sname, "Rx", pdu.SessionQuitReqId, bQuitReq, data)
-
-	// Output:
+	pass := reflection.Check(NewLoginReq(pubEncr, sig))
+	pass = pass && reflection.Check(NewRedirectReq(url))
+	pass = pass && reflection.Check(NewResumeReq())
+	pass = pass && reflection.Check(NewQuitReq())
+	if !pass {
+		t.Fail()
+	}
 }

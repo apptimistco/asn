@@ -4,10 +4,7 @@
 
 package echo
 
-import (
-	"encoding/hex"
-	"github.com/apptimistco/asn/pdu"
-)
+import "github.com/apptimistco/asn/pdu"
 
 const (
 	Request uint8 = iota
@@ -24,22 +21,24 @@ func init() {
 
 func NewEcho(reply uint8) *Echo { return &Echo{Reply: reply} }
 
-func (echo *Echo) Format(version uint8) []byte {
-	return []byte{version, pdu.EchoId.Version(version), echo.Reply}
+func (echo *Echo) Format(version uint8, h pdu.Header) {
+	h.Write([]byte{version, pdu.EchoId.Version(version), echo.Reply})
 }
 
-func (echo *Echo) Parse(header []byte) pdu.Err {
-	if len(header) != 1+1+1 {
+func (echo *Echo) Id() pdu.Id { return pdu.EchoId }
+
+func (echo *Echo) Parse(h pdu.Header) pdu.Err {
+	if h.Len() != 1+1+1 {
 		return pdu.IlFormatErr
 	}
-	echo.Reply = header[2]
+	h.Next(2)
+	echo.Reply = pdu.Getc(h)
 	return pdu.Success
 }
 
-func (echo *Echo) String(data []byte) string {
-	s := hex.EncodeToString(data)
+func (echo *Echo) String() string {
 	if echo.Reply == Reply {
-		return "Reply " + s
+		return "Reply"
 	}
-	return "Request " + s
+	return "Request"
 }
