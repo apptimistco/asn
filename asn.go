@@ -6,9 +6,9 @@ package asn
 
 import (
 	"fmt"
-	"github.com/apptimistco/asn/ack"
-	"github.com/apptimistco/asn/echo"
 	"github.com/apptimistco/asn/pdu"
+	"github.com/apptimistco/asn/pdu/ack"
+	"github.com/apptimistco/asn/pdu/echo"
 	"github.com/apptimistco/box"
 	"github.com/apptimistco/datum"
 	"github.com/apptimistco/nbo"
