@@ -10,14 +10,12 @@ const (
 	RawId Id = iota
 	AckId
 	EchoId
-	FileLockReqId
-	FileReadReqId
-	FileRemoveReqId
-	FileWriteReqId
-	HeadRptId
 	MarkReqId
 	MarkRptId
-	MessageReqId
+	ObjGetReqId
+	ObjPutReqId
+	RefGetReqId
+	RefPutReqId
 	SessionLoginReqId
 	SessionPauseReqId
 	SessionQuitReqId
@@ -69,15 +67,12 @@ const (
 	_ byte = iota
 	ackV0
 	echoV0
-	fileLockReqV0
-	fileReadReqV0
-	fileRemoveReqV0
-	fileWriteReqV0
-	headRptV0
 	markReqV0
 	markRptV0
-	locationStreamReqV0
-	messageReqV0
+	objGetReqV0
+	objPutReqV0
+	refGetReqV0
+	refPutReqV0
 	sessionLoginReqV0
 	sessionPauseReqV0
 	sessionQuitReqV0
@@ -221,14 +216,12 @@ func NormId(rxVersion, rxId byte) Id {
 	id := [(Version + 1) * MaxId]Id{
 		((0 * MaxId) | ackV0):                AckId,
 		((0 * MaxId) | echoV0):               EchoId,
-		((0 * MaxId) | fileLockReqV0):        FileLockReqId,
-		((0 * MaxId) | fileReadReqV0):        FileReadReqId,
-		((0 * MaxId) | fileRemoveReqV0):      FileRemoveReqId,
-		((0 * MaxId) | fileWriteReqV0):       FileWriteReqId,
-		((0 * MaxId) | headRptV0):            HeadRptId,
 		((0 * MaxId) | markReqV0):            MarkReqId,
 		((0 * MaxId) | markRptV0):            MarkRptId,
-		((0 * MaxId) | messageReqV0):         MessageReqId,
+		((0 * MaxId) | objGetReqV0):          ObjGetReqId,
+		((0 * MaxId) | objPutReqV0):          ObjPutReqId,
+		((0 * MaxId) | refGetReqV0):          RefGetReqId,
+		((0 * MaxId) | refPutReqV0):          RefPutReqId,
 		((0 * MaxId) | sessionLoginReqV0):    SessionLoginReqId,
 		((0 * MaxId) | sessionPauseReqV0):    SessionPauseReqId,
 		((0 * MaxId) | sessionQuitReqV0):     SessionQuitReqId,
@@ -255,14 +248,12 @@ func (id Id) String() string {
 	return [Nids]string{
 		AckId:                "Ack",
 		EchoId:               "Echo",
-		FileLockReqId:        "FileLockReq",
-		FileReadReqId:        "FileReadReq",
-		FileRemoveReqId:      "FileRemoveReq",
-		FileWriteReqId:       "FileWriteReq",
-		HeadRptId:            "HeadRpt",
 		MarkReqId:            "MarkReq",
 		MarkRptId:            "MarkRpt",
-		MessageReqId:         "MessageReq",
+		ObjGetReqId:          "ObjGetReq",
+		ObjPutReqId:          "ObjPutReq",
+		RefGetReqId:          "RefGetReq",
+		RefPutReqId:          "RefPutReq",
 		SessionLoginReqId:    "SessionLoginReq",
 		SessionPauseReqId:    "SessionPauseReq",
 		SessionQuitReqId:     "SessionQuitReq",
@@ -300,14 +291,12 @@ func (id Id) Version(version uint8) byte {
 	return [(Version + 1) * MaxId]byte{
 		((0 * MaxId) | AckId):                ackV0,
 		((0 * MaxId) | EchoId):               echoV0,
-		((0 * MaxId) | FileLockReqId):        fileLockReqV0,
-		((0 * MaxId) | FileReadReqId):        fileReadReqV0,
-		((0 * MaxId) | FileRemoveReqId):      fileRemoveReqV0,
-		((0 * MaxId) | FileWriteReqId):       fileWriteReqV0,
-		((0 * MaxId) | HeadRptId):            headRptV0,
 		((0 * MaxId) | MarkReqId):            markReqV0,
 		((0 * MaxId) | MarkRptId):            markRptV0,
-		((0 * MaxId) | MessageReqId):         messageReqV0,
+		((0 * MaxId) | ObjGetReqId):          objGetReqV0,
+		((0 * MaxId) | ObjPutReqId):          objPutReqV0,
+		((0 * MaxId) | RefGetReqId):          refGetReqV0,
+		((0 * MaxId) | RefPutReqId):          refPutReqV0,
 		((0 * MaxId) | SessionLoginReqId):    sessionLoginReqV0,
 		((0 * MaxId) | SessionPauseReqId):    sessionPauseReqV0,
 		((0 * MaxId) | SessionQuitReqId):     sessionQuitReqV0,
