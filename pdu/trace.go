@@ -6,6 +6,7 @@ package pdu
 
 import (
 	"fmt"
+	"io"
 	"sync"
 )
 
@@ -19,20 +20,10 @@ var (
 	ringIndex, ringSize int
 )
 
-const (
-	TraceReqFilter uint8 = iota
-	TraceReqUnfilter
-	TraceReqFlush
-	TraceReqResize
-)
-
-type TraceReq struct{ Cmd, Arg uint8 }
-
 func init() {
 	ringIndex, ringSize = 0, DefaultRingSize
 	ring = make([]string, ringSize)
 	ringMutex = new(sync.Mutex)
-	Register(TraceReqId, func() PDUer { return &TraceReq{} })
 }
 
 // Println formats the given operands with space separation to the log ring.
@@ -81,15 +72,21 @@ type WriteStringer interface {
 }
 
 // TraceFlush writes; then empties the trace ring buffer.
-func TraceFlush(out WriteStringer) {
+func TraceFlush(out io.Writer) {
 	ringMutex.Lock()
 	defer func() {
 		ringIndex = 0
 		ringMutex.Unlock()
 	}()
-	for i, s := range append(ring[ringIndex+1:], ring[:ringIndex]...) {
-		if len(s) != 0 {
-			out.WriteString(s)
+	for i, s := range ring[ringIndex+1:] {
+		if s != "" {
+			io.WriteString(out, s)
+			ring[i] = ""
+		}
+	}
+	for i, s := range ring[:ringIndex] {
+		if s != "" {
+			io.WriteString(out, s)
 			ring[i] = ""
 		}
 	}
@@ -116,49 +113,4 @@ func TraceUnfilter(id Id) {
 			unfilter[i] = true
 		}
 	}
-}
-
-func NewTraceReq(cmd, arg uint8) *TraceReq {
-	return &TraceReq{Cmd: cmd, Arg: arg}
-}
-
-func (req *TraceReq) Format(version uint8, h Header) {
-	var arg uint8
-	switch req.Cmd {
-	case TraceReqFilter, TraceReqUnfilter:
-		arg = Id(req.Arg).Version(version)
-	case TraceReqFlush:
-	case TraceReqResize:
-		arg = req.Arg
-	}
-	h.Write([]byte{version,
-		TraceReqId.Version(version),
-		req.Cmd,
-		arg})
-}
-
-func (req *TraceReq) Id() Id { return TraceReqId }
-
-func (req *TraceReq) Parse(h Header) Err {
-	buf := []byte{0, 0, 0, 0}
-	if n, err := h.Read(buf); err != nil || n != len(buf) {
-		return IlFormatErr
-	}
-	req.Cmd = buf[2]
-	req.Arg = buf[3]
-	return Success
-}
-
-func (req *TraceReq) String() string {
-	switch req.Cmd {
-	case TraceReqFilter:
-		return "Filter " + Id(req.Arg).String()
-	case TraceReqUnfilter:
-		return "Unfilter " + Id(req.Arg).String()
-	case TraceReqFlush:
-		return "Flush"
-	case TraceReqResize:
-		return fmt.Sprintf("Resize %d", req.Arg)
-	}
-	return "unknown"
 }

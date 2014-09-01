@@ -3,3 +3,13 @@
 /*.patch
 /*.test
 /*.pprof
+
+# ASN test build, config and generated files
+/asnadm
+/asnkeys
+/asnsrv
+/*.asn
+/*.log
+/*.pid
+/*.sock
+/*.yaml

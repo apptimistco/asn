@@ -13,14 +13,8 @@ import (
 	"github.com/apptimistco/yab"
 	"os"
 	"reflect"
+	"sync"
 )
-
-var buf *yab.Buffer
-
-func init() {
-	buf = yab.New()
-	pdu.TraceUnfilter(pdu.NpduIds)
-}
 
 // Check formats the given pdu into a buffer; parses that buffer into another
 // pdu; then compares the copy to the original. This returns true if
@@ -28,10 +22,13 @@ func init() {
 // to Stdout or Stderr on success or failure.
 func Check(a pdu.PDUer) (pass bool) {
 	var err error
+	once := &sync.Once{}
 	id := a.Id()
 	b := pdu.New(id)
 
-	buf.Reset()
+	once.Do(func() { pdu.TraceUnfilter(pdu.NpduIds) })
+	buf := yab.Pull()
+	defer yab.Push(&buf)
 	a.Format(pdu.Version, buf)
 	if e := b.Parse(buf); e != pdu.Success {
 		err = pdu.Errors[e]

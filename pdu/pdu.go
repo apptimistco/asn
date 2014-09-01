@@ -9,7 +9,7 @@ import "errors"
 const (
 	RawId Id = iota
 	AckId
-	EchoId
+	ExecReqId
 	MarkReqId
 	MarkRptId
 	ObjGetReqId
@@ -21,7 +21,6 @@ const (
 	SessionQuitReqId
 	SessionRedirectReqId
 	SessionResumeReqId
-	TraceReqId
 	UserAddReqId
 	UserDelReqId
 	UserSearchReqId
@@ -37,13 +36,11 @@ const (
 	UnexpectedId
 	UnknownId
 	UnsupportedId
-
-	Ncounters
-
-	TraceRxId
-	TraceTxId
 	Nids
+)
 
+const (
+	Ncounters = Nids
 	SuccessId = NpduIds
 	Nerrors   = uint(Ncounters - NpduIds)
 
@@ -66,7 +63,7 @@ const (
 const (
 	_ byte = iota
 	ackV0
-	echoV0
+	execReqV0
 	markReqV0
 	markRptV0
 	objGetReqV0
@@ -215,7 +212,7 @@ func NormId(rxVersion, rxId byte) Id {
 	}
 	id := [(Version + 1) * MaxId]Id{
 		((0 * MaxId) | ackV0):                AckId,
-		((0 * MaxId) | echoV0):               EchoId,
+		((0 * MaxId) | execReqV0):            ExecReqId,
 		((0 * MaxId) | markReqV0):            MarkReqId,
 		((0 * MaxId) | markRptV0):            MarkRptId,
 		((0 * MaxId) | objGetReqV0):          ObjGetReqId,
@@ -227,7 +224,6 @@ func NormId(rxVersion, rxId byte) Id {
 		((0 * MaxId) | sessionQuitReqV0):     SessionQuitReqId,
 		((0 * MaxId) | sessionRedirectReqV0): SessionRedirectReqId,
 		((0 * MaxId) | sessionResumeReqV0):   SessionResumeReqId,
-		((0 * MaxId) | traceReqV0):           TraceReqId,
 		((0 * MaxId) | userAddReqV0):         UserAddReqId,
 		((0 * MaxId) | userDelReqV0):         UserDelReqId,
 		((0 * MaxId) | userSearchReqV0):      UserSearchReqId,
@@ -246,8 +242,10 @@ func (id Id) String() string {
 		i = int(UnknownId)
 	}
 	return [Nids]string{
+		RawId: "Raw",
+
 		AckId:                "Ack",
-		EchoId:               "Echo",
+		ExecReqId:            "ExecReq",
 		MarkReqId:            "MarkReq",
 		MarkRptId:            "MarkRpt",
 		ObjGetReqId:          "ObjGetReq",
@@ -259,7 +257,6 @@ func (id Id) String() string {
 		SessionQuitReqId:     "SessionQuitReq",
 		SessionRedirectReqId: "SessionRedirectReq",
 		SessionResumeReqId:   "SessionResumeReq",
-		TraceReqId:           "TraceReq",
 		UserAddReqId:         "UserAddReq",
 		UserDelReqId:         "UserDelReq",
 		UserSearchReqId:      "UserSearchReq",
@@ -275,10 +272,6 @@ func (id Id) String() string {
 		UnexpectedId:   "Unexpected",
 		UnknownId:      "Unknown",
 		UnsupportedId:  "Unsupported",
-
-		RawId:     "Raw",
-		TraceRxId: "TraceRx",
-		TraceTxId: "TraceTx",
 	}[i]
 }
 
@@ -290,7 +283,7 @@ func (id Id) Version(version uint8) byte {
 	i := uint(version*MaxId) | uint(id)
 	return [(Version + 1) * MaxId]byte{
 		((0 * MaxId) | AckId):                ackV0,
-		((0 * MaxId) | EchoId):               echoV0,
+		((0 * MaxId) | ExecReqId):            execReqV0,
 		((0 * MaxId) | MarkReqId):            markReqV0,
 		((0 * MaxId) | MarkRptId):            markRptV0,
 		((0 * MaxId) | ObjGetReqId):          objGetReqV0,
@@ -302,7 +295,6 @@ func (id Id) Version(version uint8) byte {
 		((0 * MaxId) | SessionQuitReqId):     sessionQuitReqV0,
 		((0 * MaxId) | SessionRedirectReqId): sessionRedirectReqV0,
 		((0 * MaxId) | SessionResumeReqId):   sessionResumeReqV0,
-		((0 * MaxId) | TraceReqId):           traceReqV0,
 		((0 * MaxId) | UserAddReqId):         userAddReqV0,
 		((0 * MaxId) | UserDelReqId):         userDelReqV0,
 		((0 * MaxId) | UserSearchReqId):      userSearchReqV0,
@@ -312,6 +304,7 @@ func (id Id) Version(version uint8) byte {
 
 // Header is an interface wrapper for the PDU header buffer.
 type Header interface {
+	Bytes() []byte
 	Read([]byte) (int, error)
 	Write([]byte) (int, error)
 	Len() int

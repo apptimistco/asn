@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"github.com/apptimistco/asn/pdu"
 	"github.com/apptimistco/asn/pdu/ack"
-	"github.com/apptimistco/asn/pdu/echo"
 	"github.com/apptimistco/box"
 	"github.com/apptimistco/datum"
 	"github.com/apptimistco/nbo"
@@ -16,41 +15,37 @@ import (
 	"io"
 	"io/ioutil"
 	"net"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
 
 var (
 	Diag = ioutil.Discard
+	pool chan *ASN
 )
 
 const connTO = 200 * time.Millisecond
 
 const (
-	_ uint8 = iota
+	undefined uint8 = iota
 	established
 	suspended
 	quitting
 )
 
-type Rxer func(pdu.PDUer, *datum.Datum) error
-
-var noopRx Rxer = func(_ pdu.PDUer, _ *datum.Datum) error { return nil }
+func init() { pool = make(chan *ASN, 16) }
 
 type ASN struct {
 	// Name of session prefaced to trace logs and diagnostics.
 	Name string
-	// PDU receivers
-	rxer [pdu.NpduIds]Rxer
 	// Need to lock Tx but UntilQuit is single threaded
 	mutex *sync.Mutex
 	// Version adapts to peer
+	version uint8
 	// State may be { undefined, established, suspended, quitting }
-	version, state uint8
-	// Receive data
-	rxdata *datum.Datum
-	// Opened/Sealed Rx/Tx Header Buffers
-	orhbuf, othbuf, srhbuf, sthbuf *yab.Buffer
+	state uint8
 	// Keys to Open/Seal Header Buffers
 	box *box.Box
 	// Channels to interrupt Conn Read/Write
@@ -59,39 +54,84 @@ type ASN struct {
 	conn  net.Conn
 }
 
+// Del[ete] an ASN
+func Del(a *ASN) {
+	if a == nil {
+		return
+	}
+	a.mutex = nil
+	a.box = nil
+	close(a.rstop)
+	close(a.wstop)
+	if a.conn != nil {
+		a.conn.Close()
+		a.conn = nil
+	}
+}
+
+// Flush the ASN pool.
+func Flush() {
+	for {
+		select {
+		case a := <-pool:
+			Del(a)
+		default:
+			return
+		}
+	}
+}
+
 // New Apptimist Social Network Service or App.
 func New(name string) *ASN {
-	asn := &ASN{
+	return &ASN{
 		Name:    name,
 		version: pdu.Version,
+		mutex:   &sync.Mutex{},
+		rstop:   make(chan error),
+		wstop:   make(chan error),
 	}
-	asn.Register(pdu.SessionPauseReqId, noopRx)
-	asn.Register(pdu.SessionResumeReqId, noopRx)
-	asn.mutex = new(sync.Mutex)
-	asn.rxdata, _ = datum.Open("")
-	asn.orhbuf = yab.New()
-	asn.othbuf = yab.New()
-	asn.srhbuf = yab.New()
-	asn.sthbuf = yab.New()
-	asn.rstop = make(chan error)
-	asn.wstop = make(chan error)
-	return asn
 }
 
-func (asn *ASN) Close() error {
-	asn.rxdata.Close()
-	asn.orhbuf.Close()
-	asn.othbuf.Close()
-	asn.srhbuf.Close()
-	asn.sthbuf.Close()
-	return nil
+// Pull an ASN from pool or create a new one if necessary.
+func Pull() (a *ASN) {
+	select {
+	case a = <-pool:
+	default:
+		a = New("unnamed")
+	}
+	return
 }
 
-// Register a creator for the given id.
-func (asn *ASN) Register(id pdu.Id, rx Rxer) {
-	if id < pdu.NpduIds {
-		asn.rxer[id] = rx
+// Push the double-indirect ASN back to pool or release it to GC if full;
+// then nil its reference.
+func Push(p **ASN) {
+	a := *p
+	if a == nil {
+		return
 	}
+	// flush any stop signals
+	for _, ch := range [2]chan error{a.rstop, a.wstop} {
+	stopLoop:
+		for {
+			select {
+			case <-ch:
+			default:
+				break stopLoop
+			}
+		}
+	}
+	if a.conn != nil {
+		a.conn.Close()
+		a.conn = nil
+	}
+	a.Name = ""
+	a.state = undefined
+	select {
+	case pool <- a:
+	default:
+		Del(a)
+	}
+	*p = nil
 }
 
 // Preempt PDU Rx & Tx.
@@ -101,7 +141,7 @@ func (asn *ASN) Preempt() {
 }
 
 // Ack the given PDU Id. On an error with nil data, include the error string.
-func (asn *ASN) Ack(id pdu.Id, e pdu.Err, vdata interface{}) {
+func (asn *ASN) Ack(id pdu.Id, e pdu.Err, vdata interface{}) error {
 	if id != pdu.AckId { // don't ack an Ack
 		if e != pdu.Success && uint(e) < pdu.Nerrors {
 			if vdata == nil {
@@ -110,145 +150,9 @@ func (asn *ASN) Ack(id pdu.Id, e pdu.Err, vdata interface{}) {
 				}
 			}
 		}
-		asn.Tx(ack.NewAck(id, e), vdata)
+		return asn.Tx(ack.NewAck(id, e), vdata)
 	}
-}
-
-// RxUntilErr receives, decrypts, parses and processes ASN PDUs
-// through registered receivers until and acknowledged QuitReq
-// or error. This may be killed with asn.Preempt()
-func (asn *ASN) UntilQuit() (err error) {
-	defer func() {
-		if err != nil && err != io.EOF {
-			fmt.Fprintln(Diag, asn.Name, "UntilQuit:", err)
-		}
-	}()
-Loop:
-	for {
-		if err = asn.rxOpen(); err != nil {
-			return
-		}
-		pdu.Trace(pdu.RawId, asn.Name, "Rx", pdu.RawId, asn.orhbuf)
-		id := pdu.ShortId
-		if len(asn.orhbuf.Buf) >= 2 {
-			id = pdu.NormId(asn.orhbuf.Buf[0], asn.orhbuf.Buf[1])
-		}
-		if id.IsErr() {
-			asn.Ack(id, id.Err(), nil)
-		}
-		if asn.orhbuf.Buf[0] < asn.version {
-			asn.version = asn.orhbuf.Buf[0]
-		}
-		vpdu := pdu.New(id)
-		if vpdu == nil {
-			asn.Ack(id, pdu.UnknownErr, nil)
-			continue Loop
-		}
-		e := vpdu.Parse(asn.orhbuf)
-		if e != pdu.Success {
-			asn.Ack(id, e, nil)
-			continue Loop
-		}
-		pdu.Trace(id, asn.Name, "Rx", id, vpdu)
-		rxer := asn.rxer[id]
-		switch id {
-		// The do nothing cases bypass the default state check.
-		default:
-			if asn.state != established {
-				return pdu.ErrDisestablished
-			}
-		case pdu.AckId:
-			xack, _ := vpdu.(*ack.Ack)
-			if xack.Err == pdu.Success {
-				if xack.Req == pdu.SessionLoginReqId {
-					asn.state = established
-				}
-				if xack.Req == pdu.SessionQuitReqId {
-					if asn.state != quitting {
-						asn.Ack(id, pdu.UnexpectedErr,
-							nil)
-						continue Loop
-					} else if rxer == nil {
-						return io.EOF
-					}
-				}
-			}
-		case pdu.EchoId:
-			if rxer == nil {
-				xecho, _ := vpdu.(*echo.Echo)
-				if xecho.Reply == echo.Request {
-					xecho.Reply = echo.Reply
-					asn.Tx(xecho, asn.rxdata)
-					continue Loop
-				}
-			}
-		case pdu.SessionLoginReqId:
-		case pdu.SessionPauseReqId:
-			if asn.state != established {
-				asn.Ack(id, pdu.UnexpectedErr, nil)
-				continue Loop
-			}
-			asn.Ack(id, pdu.Success, nil)
-		case pdu.SessionResumeReqId:
-			if asn.state != suspended {
-				asn.Ack(id, pdu.UnexpectedErr, nil)
-				continue Loop
-			}
-			asn.Ack(id, pdu.Success, nil)
-		case pdu.SessionQuitReqId:
-			if rxer == nil {
-				asn.Ack(id, pdu.Success, nil)
-				return io.EOF
-			}
-		case pdu.UserAddReqId:
-		}
-		if rxer == nil {
-			asn.Ack(id, pdu.UnsupportedErr, nil)
-		} else if err = rxer(vpdu, asn.rxdata); err != nil {
-			for i, e := range pdu.Errors {
-				if e == err {
-					asn.Ack(id, pdu.Err(i), nil)
-					err = nil
-				}
-			}
-			if err == nil {
-				return err
-			}
-		}
-	}
-}
-
-// rxOpen receives the PDU then opens its encrypted header.
-func (asn *ASN) rxOpen() (err error) {
-	var l uint64
-	if _, err = (nbo.Reader{asn}).ReadNBO(&l); err != nil {
-		return
-	}
-	hlen := l >> 48
-	dlen := l & 0xffffffffffff
-	if int(hlen) > cap(asn.srhbuf.Buf) {
-		asn.rxdata.Reset()
-		asn.rxdata.Limit(int64(dlen))
-		asn.rxdata.ReadFrom(asn)
-		asn.rxdata.Reset()
-		err = yab.ErrTooLarge
-		return
-	}
-	asn.srhbuf.Limit(int64(hlen))
-	if _, err = asn.srhbuf.ReadFrom(asn); err != nil {
-		return
-	}
-	if dlen > 0 {
-		asn.rxdata.Reset()
-		asn.rxdata.Limit(int64(dlen))
-		_, err = asn.rxdata.ReadFrom(asn)
-		if err != nil {
-			return err
-		}
-	}
-	asn.orhbuf.Reset()
-	asn.orhbuf.Buf, err = asn.box.Open(asn.orhbuf.Buf, asn.srhbuf.Buf)
-	return
+	return nil
 }
 
 // Read full buffer unless preempted.
@@ -272,22 +176,137 @@ func (asn *ASN) Read(b []byte) (n int, err error) {
 	return
 }
 
+// Rx receives, decrypts, parses and returns the ASN PDU with its data, if any.
+// This also performs state transitions per ASN protocol.
+func (asn *ASN) Rx() (vpdu pdu.PDUer, d *datum.Datum, err error) {
+	var h *yab.Buffer
+	for {
+		h, d, err = asn.rxopen()
+		if err != nil {
+			break
+		}
+		pdu.Trace(pdu.RawId, asn.Name, "Rx", pdu.RawId, h)
+		id := pdu.ShortId
+		if len(h.Buf) >= 2 {
+			id = pdu.NormId(h.Buf[0], h.Buf[1])
+		}
+		if id.IsErr() {
+			asn.Ack(id, id.Err(), nil)
+			goto again
+		}
+		if h.Buf[0] < asn.version {
+			asn.version = h.Buf[0]
+		}
+		vpdu = pdu.New(id)
+		if vpdu == nil {
+			asn.Ack(id, pdu.UnknownErr, nil)
+			goto again
+		}
+		if e := vpdu.Parse(h); e != pdu.Success {
+			asn.Ack(id, e, nil)
+			goto again
+		}
+		pdu.Trace(id, asn.Name, "Rx", id, vpdu)
+		switch id {
+		// The do nothing cases bypass the default state check.
+		default:
+			if asn.state != established {
+				err = pdu.ErrDisestablished
+			}
+		case pdu.AckId:
+			switch xack, _ := vpdu.(*ack.Ack); xack.Req {
+			case pdu.SessionLoginReqId:
+				if xack.Err == pdu.Success {
+					asn.state = established
+				} else if uint(xack.Err) < pdu.Nerrors {
+					err = pdu.Errors[xack.Err]
+				} else {
+					err = pdu.Errors[pdu.DeniedErr]
+				}
+			case pdu.SessionQuitReqId:
+				if asn.state != quitting {
+					goto again
+				}
+			}
+		case pdu.SessionLoginReqId:
+		case pdu.SessionPauseReqId:
+			if asn.state != established {
+				asn.Ack(id, pdu.UnexpectedErr, nil)
+				goto again
+			}
+			asn.Ack(id, pdu.Success, nil)
+		case pdu.SessionResumeReqId:
+			if asn.state != suspended {
+				asn.Ack(id, pdu.UnexpectedErr, nil)
+				goto again
+			}
+			asn.Ack(id, pdu.Success, nil)
+		case pdu.SessionQuitReqId:
+			asn.Ack(id, pdu.Success, nil)
+			err = io.EOF
+		case pdu.UserAddReqId:
+		}
+		break
+	again:
+		yab.Push(&h)
+		datum.Push(&d)
+	}
+	yab.Push(&h)
+	if err != nil {
+		datum.Push(&d)
+	}
+	return
+}
+
+// rxopen receives the PDU then opens its encrypted header.
+func (asn *ASN) rxopen() (h *yab.Buffer, d *datum.Datum, err error) {
+	var l uint64
+	if _, err = (nbo.Reader{asn}).ReadNBO(&l); err != nil {
+		return
+	}
+	hlen := l >> 48
+	dlen := l & 0xffffffffffff
+	redh := yab.Pull()
+	defer yab.Push(&redh)
+	redh.Limit(int64(hlen))
+	if int(hlen) > cap(redh.Buf) {
+		err = yab.ErrTooLarge
+		return
+	}
+	if _, err = redh.ReadFrom(asn); err != nil {
+		return
+	}
+	if dlen > 0 {
+		d = datum.Pull()
+		d.Limit(int64(dlen))
+		_, err = d.ReadFrom(asn)
+		if err != nil {
+			return
+		}
+	}
+	h = yab.Pull()
+	h.Buf, err = asn.box.Open(h.Buf, redh.Buf)
+	return
+}
+
 func (asn *ASN) SetBox(box *box.Box)   { asn.box = box }
 func (asn *ASN) SetConn(conn net.Conn) { asn.conn = conn }
 
 // Format, box, then send a PDU.
 func (asn *ASN) Tx(vpdu pdu.PDUer, vdata interface{}) (err error) {
+	h := yab.Pull()
 	asn.mutex.Lock()
 	defer func() {
 		asn.mutex.Unlock()
+		yab.Push(&h)
 		if err != nil && err != io.EOF {
 			fmt.Fprintln(Diag, asn.Name, "Tx:", err)
 		}
 	}()
-	asn.othbuf.Reset()
-	vpdu.Format(asn.version, asn.othbuf)
+	vpdu.Format(asn.version, h)
 	id := vpdu.Id()
 	switch asn.state {
+	case established:
 	case quitting:
 		return pdu.ErrUnexpected
 	case suspended:
@@ -296,18 +315,17 @@ func (asn *ASN) Tx(vpdu pdu.PDUer, vdata interface{}) (err error) {
 		}
 	default:
 		if id != pdu.AckId &&
-			id != pdu.EchoId &&
 			id != pdu.UserAddReqId &&
 			id != pdu.SessionLoginReqId &&
 			id != pdu.SessionQuitReqId {
 			return pdu.ErrUnexpected
 		}
 	}
-	if err = asn.sealTx(vdata); err != nil {
+	if err = asn.sealTx(h, vdata); err != nil {
 		return
 	}
 	pdu.Trace(id, asn.Name, "Tx", id, vpdu)
-	pdu.Trace(pdu.RawId, asn.Name, "Tx", pdu.RawId, asn.othbuf)
+	pdu.Trace(pdu.RawId, asn.Name, "Tx", pdu.RawId, h)
 	switch id {
 	case pdu.AckId:
 		xack, _ := vpdu.(*ack.Ack)
@@ -332,13 +350,14 @@ func (asn *ASN) Tx(vpdu pdu.PDUer, vdata interface{}) (err error) {
 }
 
 // sealTx seals the header then transmits the PDU.
-func (asn *ASN) sealTx(vdata interface{}) (err error) {
-	asn.sthbuf.Reset()
-	asn.sthbuf.Buf, err = asn.box.Seal(asn.sthbuf.Buf, asn.othbuf.Buf)
+func (asn *ASN) sealTx(h *yab.Buffer, vdata interface{}) (err error) {
+	redh := yab.Pull()
+	defer yab.Push(&redh)
+	redh.Buf, err = asn.box.Seal(redh.Buf, h.Buf)
 	if err != nil {
 		return err
 	}
-	l := uint64(len(asn.sthbuf.Buf)) << 48
+	l := uint64(len(redh.Buf)) << 48
 	switch t := vdata.(type) {
 	case *datum.Datum:
 		l |= uint64(t.Len())
@@ -348,10 +367,11 @@ func (asn *ASN) sealTx(vdata interface{}) (err error) {
 		l |= uint64(len(t))
 	}
 	if _, err = (nbo.Writer{asn}).WriteNBO(l); err == nil {
-		if _, err = asn.sthbuf.WriteTo(asn); err == nil {
+		if _, err = redh.WriteTo(asn); err == nil {
 			switch t := vdata.(type) {
 			case *datum.Datum:
 				_, err = t.WriteTo(asn)
+				datum.Push(&t)
 			case string:
 				_, err = asn.Write([]byte(t))
 			case []byte:
@@ -381,4 +401,22 @@ func (asn *ASN) Write(b []byte) (n int, err error) {
 		}
 	}
 	return
+}
+
+// UrlPathSearch looks for the given file in this order.
+//	path		return
+//	/foo.bar	foo.bar
+//	/foo/bar	foo/bar if foo/ exists; otherwise
+//			/foo/bar
+func UrlPathSearch(path string) string {
+	dir := filepath.Dir(path)
+	if dir == "/" {
+		return filepath.Base(path)
+	} else {
+		if f, err := os.Open(dir[1:]); err == nil {
+			f.Close()
+			return path[1:]
+		}
+	}
+	return path
 }

@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package echo
+package exec
 
 import (
 	"github.com/apptimistco/asn/pdu/reflection"
@@ -10,7 +10,7 @@ import (
 )
 
 func Test(t *testing.T) {
-	if !reflection.Check(NewEcho(Request)) {
+	if !reflection.Check(NewExec("echo", "hello world")) {
 		t.Fail()
 	}
 }
