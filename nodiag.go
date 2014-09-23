@@ -2,15 +2,15 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package exec
+// +build !diag
+
+package asn
 
 import (
-	"github.com/apptimistco/asn/pdu/reflection"
-	"testing"
+	"io/ioutil"
+	"log"
 )
 
-func Test(t *testing.T) {
-	if !reflection.Check(NewExec("echo", "hello world")) {
-		t.Fail()
-	}
-}
+var Diag *log.Logger
+
+func init() { Diag = log.New(ioutil.Discard, "", 0) }

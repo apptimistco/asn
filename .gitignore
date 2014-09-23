@@ -8,8 +8,9 @@
 /asnadm
 /asnkeys
 /asnsrv
-/*.asn
-/*.log
-/*.pid
-/*.sock
 /*.yaml
+*.asn
+*.diag
+*.log
+*.pid
+*.sock

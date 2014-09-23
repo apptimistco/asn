@@ -6,10 +6,13 @@ package srv
 
 import (
 	"github.com/apptimistco/asn"
+	"github.com/apptimistco/encr"
 )
 
 type ses struct {
 	asn *asn.ASN
+
+	peer, user encr.Pub
 }
 
 var poolSes chan *ses
@@ -22,7 +25,8 @@ func delSes(p *ses) {
 		return
 	}
 	if p.asn != nil {
-		asn.Push(&p.asn)
+		p.asn.Free()
+		p.asn = nil
 	}
 }
 
@@ -39,14 +43,14 @@ func flushSes() {
 }
 
 func newSes() *ses {
-	return &ses{asn: asn.Pull()}
+	return &ses{asn: asn.NewASN()}
 }
 
 // pull an ses from the pool or create a new one if necessary.
 func pullSes() (p *ses) {
 	select {
 	case p = <-poolSes:
-		p.asn = asn.Pull()
+		p.asn = asn.NewASN()
 	default:
 		p = newSes()
 	}
@@ -62,7 +66,8 @@ func pushSes(pp **ses) {
 	}
 	select {
 	case poolSes <- p:
-		asn.Push(&p.asn)
+		p.asn.Free()
+		p.asn = nil
 	default:
 		delSes(p)
 	}

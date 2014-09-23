@@ -5,9 +5,8 @@
 package srv
 
 import (
-	"github.com/apptimistco/asn/pdu"
-	"github.com/apptimistco/asn/pdu/exec"
-	"github.com/apptimistco/datum"
+	"bytes"
+	"github.com/apptimistco/asn"
 	"strings"
 )
 
@@ -16,50 +15,50 @@ echo [ARGS...]
 	Returns space separated ARGS in the Ack data.
 `
 
-func rxExec(srv *server, ses *ses, vpdu pdu.PDUer, d *datum.Datum) error {
-	p, ok := vpdu.(*exec.Exec)
-	if !ok {
-		return pdu.ErrParse
+func rxExec(srv *server, ses *ses, pdu *asn.PDU) error {
+	var req asn.Requester
+	var cmd [256]byte
+	const sep = "--\x00"
+	req.ReadFrom(pdu)
+	n, _ := pdu.Read(cmd[:])
+	sepi := bytes.Index(cmd[:n], []byte(sep))
+	if sepi > 0 {
+		n = sepi
 	}
-	args := []string(*p)
-	if len(args) <= 0 {
-		return pdu.ErrIlFormat
+	args := strings.Split(string(cmd[:n]), "\x00")
+	if sepi > 0 {
+		pdu.Rewind()
+		pdu.Read(cmd[:sepi+len(sep)])
 	}
 	switch args[0] {
 	case "help":
-		datum.Push(&d)
-		ses.asn.Ack(p.Id(), pdu.Success, execHelp)
+		ses.asn.Ack(req, execHelp)
 	case "echo":
-		datum.Push(&d)
-		reply := ""
-		if len(args) > 1 {
-			reply = strings.Join(args[1:], " ")
-		}
-		ses.asn.Ack(p.Id(), pdu.Success, reply)
+		ses.asn.Ack(req, strings.Join(args[1:], " "))
+	case "get":
+		srv.log.Println("FIXME", args[0])
+		ses.asn.Ack(req, asn.ErrUnknown)
 	case "trace":
-		datum.Push(&d)
-		execTrace(srv, ses, args[1:]...)
+		execTrace(srv, ses, req, args[1:]...)
+	case "put":
+		srv.log.Println("FIXME", args[0])
+		ses.asn.Ack(req, asn.ErrUnknown)
 	default:
-		datum.Push(&d)
-		ses.asn.Ack(p.Id(), pdu.UnknownErr, nil)
+		srv.log.Println(asn.ErrUnknown, args[0])
+		ses.asn.Ack(req, asn.ErrUnknown)
 	}
 	return nil
 }
 
-func execTrace(srv *server, ses *ses, args ...string) {
-	if len(args) == 0 || args[0] == "flush" {
-		d := datum.Pull()
-		pdu.TraceFlush(d)
-		ses.asn.Ack(pdu.ExecReqId, pdu.Success, d)
-		return
+func execTrace(srv *server, ses *ses, req asn.Requester, args ...string) {
+	if len(args) == 0 {
+		args = append(args, "flush")
 	}
-	// FIXME
-	switch args[1] {
-	case "filter":
-		ses.asn.Ack(pdu.ExecReqId, pdu.FailureErr, nil)
-	case "unfilter":
-		ses.asn.Ack(pdu.ExecReqId, pdu.FailureErr, nil)
-	case "resize":
-		ses.asn.Ack(pdu.ExecReqId, pdu.FailureErr, nil)
+	switch args[0] {
+	case "flush":
+		ses.asn.Ack(req, asn.TraceFlush)
+	case "filter", "unfilter", "resize":
+		srv.log.Println("FIXME", "trace", args[0])
+		ses.asn.Ack(req, asn.ErrUnknown)
 	}
 }

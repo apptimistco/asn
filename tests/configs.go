@@ -2,25 +2,19 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package asn_test
+package tests
 
 import (
+	"bytes"
 	"github.com/apptimistco/asn/adm"
 	"github.com/apptimistco/asn/keys"
 	"github.com/apptimistco/asn/srv"
-	"github.com/apptimistco/yab"
-	"os"
-	"testing"
 	"text/template"
 )
 
-const (
-	asnadm = "asnadm"
-	asnsrv = "asnsrv"
-)
-
-func TestEcho(t *testing.T) {
-	admTmpl := template.Must(template.New("adm").Parse(`
+var (
+	// common ASN test configurations
+	admTmpl = template.Must(template.New("adm").Parse(adm.Inline + `
 name: siren-adm
 dir: siren-adm.asn
 lat: 37.774929
@@ -52,7 +46,7 @@ server:
   lat: 34.052234
   lon: -118.243684
 `))
-	srvTmpl := template.Must(template.New("srv").Parse(`
+	srvTmpl = template.Must(template.New("srv").Parse(srv.Inline + `
 name: siren-sf
 dir: siren-sf.asn
 lat: 37.774929
@@ -76,27 +70,19 @@ listen:
 - unix:///siren-sf.sock
 - ws://localhost:6969/asn/siren.ws
 `))
+)
+
+func Configs() (adm, srv string) {
 	k, err := keys.New()
 	if err != nil {
-		t.Fatal(err)
+		return
 	}
-	defer k.Clean()
-	admConfig := yab.Pull()
-	defer yab.Push(&admConfig)
-	srvConfig := yab.Pull()
-	defer yab.Push(&srvConfig)
-	admTmpl.Execute(admConfig, k)
-	srvTmpl.Execute(srvConfig, k)
-	go srv.Main(asnsrv, srv.Inline+string(srvConfig.Buf))
-	err = adm.Main(asnadm, adm.Inline+string(admConfig.Buf), "0",
-		"echo", "hello", "world")
-	if err != nil {
-		t.Error(err)
-	}
-	err = adm.Main(asnadm, adm.Inline+string(admConfig.Buf), "1",
-		"echo", "hello", "world")
-	if err != nil {
-		t.Error(err)
-	}
-	srv.KillAll(os.Interrupt)
+	admConfigBuffer := &bytes.Buffer{}
+	srvConfigBuffer := &bytes.Buffer{}
+	admTmpl.Execute(admConfigBuffer, k)
+	srvTmpl.Execute(srvConfigBuffer, k)
+	adm = string(admConfigBuffer.Bytes())
+	srv = string(srvConfigBuffer.Bytes())
+	k.Clean()
+	return
 }

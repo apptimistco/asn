@@ -18,13 +18,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/apptimistco/asn"
-	"github.com/apptimistco/asn/pdu"
 	"github.com/apptimistco/asn/srv/config"
 	"github.com/apptimistco/box"
-	"github.com/apptimistco/datum"
-	"github.com/apptimistco/encr"
-	"github.com/apptimistco/yab"
-	"io"
 	"io/ioutil"
 	"log"
 	"log/syslog"
@@ -32,7 +27,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -47,8 +41,17 @@ const (
 var (
 	ErrUsage = errors.New(Usage)
 	mutex    = &sync.Mutex{}
-	once     = &sync.Once{}
-	servers  []*server
+	rxers    = [asn.Nids]func(*server, *ses, *asn.PDU) error{
+		asn.ExecReqId:   rxExec,
+		asn.LoginReqId:  rxLogin,
+		asn.PauseReqId:  rxPause,
+		asn.ResumeReqId: rxResume,
+		asn.QuitReqId:   rxQuit,
+
+		asn.BlobId:  rxBlob,
+		asn.IndexId: rxIndex,
+	}
+	servers []*server
 )
 
 func init() {
@@ -56,10 +59,6 @@ func init() {
 }
 
 func Main(args ...string) (err error) {
-	once.Do(func() {
-		pdu.TraceUnfilter(pdu.NpduIds)
-		pdu.TraceFilter(pdu.RawId)
-	})
 	if help(args...) {
 		return
 	}
@@ -99,12 +98,10 @@ func Main(args ...string) (err error) {
 	for {
 		sig := <-srv.sig
 		srv.log.Println("caught", sig)
-		b := yab.Pull()
-		pdu.TraceFlush(b)
-		if b.Len() > 0 {
-			srv.log.Print("PDU Trace...\n", string(b.Buf))
+		if srv.logf != nil {
+			srv.log.Println("PDU Trace...")
+			asn.TraceFlush(srv.logf)
 		}
-		yab.Push(&b)
 		if sig == syscall.SIGINT || sig == syscall.SIGTERM {
 			srv.stopListening()
 		}
@@ -114,9 +111,8 @@ func Main(args ...string) (err error) {
 		}
 	}
 	delSrv(srv)
-	if len(servers) == 0 {
-		datum.Flush()
-	}
+	asn.FlushASN()
+	asn.FlushPDU()
 	srv.log.Println("stopped")
 	return
 }
@@ -240,42 +236,46 @@ func (srv *server) handler(conn net.Conn) {
 	ses := pullSes()
 	defer pushSes(&ses)
 	srv.addSes(ses)
-	defer srv.delSes(ses)
+	defer func() {
+		srv.log.Println("closed", ses.peer.String()[:8]+"...")
+		srv.delSes(ses)
+		pushSes(&ses)
+		conn.Close()
+	}()
 	ses.asn.Name = srv.config.Name + "[unnamed]"
-	peer := srv.config.Keys.Admin.Pub.Encr
-	if ws, ok := conn.(*websocket.Conn); ok {
-		var err error
-		q := ws.Config().Location.RawQuery
-		qkey := "key="
-		if !strings.HasPrefix(q, qkey) {
-			srv.log.Println("ws query missing key")
-			return
-		}
-		s := strings.TrimPrefix(q, qkey)
-		peer, err = encr.NewPubString(s)
-		if err != nil {
-			srv.log.Println("ws query invalid key")
-			return
-		}
-	}
-	ses.asn.SetBox(box.New(2, srv.config.Keys.Nonce, peer,
+	ses.asn.SetConn(conn)
+	conn.Read(ses.peer[:])
+	srv.log.Println("connected", ses.peer.String()[:8]+"...")
+	ses.asn.SetBox(box.New(2, srv.config.Keys.Nonce, &ses.peer,
 		srv.config.Keys.Server.Pub.Encr,
 		srv.config.Keys.Server.Sec.Encr))
-	ses.asn.SetConn(conn)
 	for {
-		vpdu, d, err := ses.asn.Rx()
-		if err != nil {
-			if err != io.EOF {
-				srv.log.Println(ses.asn.Name, "Rx error:", err)
-			}
-			return
+		var err error
+		var v asn.Version
+		var id asn.Id
+		pdu := <-ses.asn.RxQ
+		if pdu == nil {
+			break
 		}
-		if rx := rxers[vpdu.Id()]; rx != nil {
-			if err := rx(srv, ses, vpdu, d); err != nil {
-				srv.log.Println(ses.asn.Name, vpdu.Id(),
-					"error:", err)
-				return
+		v.ReadFrom(pdu)
+		if v > ses.asn.Version() {
+			ses.asn.SetVersion(v)
+		}
+		id.ReadFrom(pdu)
+		if id.Internal(v); id >= asn.Nids {
+			err = asn.ErrIncompatible
+		} else {
+			asn.Trace(ses.asn.Name, "Rx", id)
+			if rx := rxers[id]; rx == nil {
+				err = asn.ErrUnsupported
+			} else {
+				err = rx(srv, ses, pdu)
 			}
+		}
+		pdu.Free()
+		if err != nil {
+			srv.log.Println("Error:", ses.asn.Name, err)
+			break
 		}
 	}
 }
@@ -340,8 +340,13 @@ func (srv *server) listen() error {
 				}
 				return s.Serve(l)
 			*/
-			http.Handle(lurl.Path, websocket.Handler(f))
-			go http.Serve(l.ln, nil)
+			/*
+				http.Handle(lurl.Path, websocket.Handler(f))
+				go http.Serve(l.ln, nil)
+			*/
+			mux := http.NewServeMux()
+			mux.Handle(lurl.Path, websocket.Handler(f))
+			go http.Serve(l.ln, mux)
 		default:
 			srv.log.Println("lurl:", lurl.String())
 			return errors.New("unsupported scheme: " + lurl.Scheme)
@@ -371,7 +376,7 @@ func (srv *server) hangup() {
 		srv.mutex.Lock()
 		ses := srv.sessions[0]
 		srv.mutex.Unlock()
-		ses.asn.Preempt()
+		ses.asn.SetStateClosed()
 		for {
 			time.Sleep(100 * time.Millisecond)
 			if len(srv.sessions) == 0 || srv.sessions[0] != ses {

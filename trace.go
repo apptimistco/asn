@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package pdu
+package asn
 
 import (
 	"fmt"
@@ -15,7 +15,7 @@ const DefaultRingSize = 32
 var (
 	ringMutex *sync.Mutex
 	ring      []string
-	unfilter  [NpduIds]bool
+	unfilter  [Nids]bool
 
 	ringIndex, ringSize int
 )
@@ -24,6 +24,8 @@ func init() {
 	ringIndex, ringSize = 0, DefaultRingSize
 	ring = make([]string, ringSize)
 	ringMutex = new(sync.Mutex)
+	TraceUnfilter(Nids)
+	TraceFilter(RawId)
 }
 
 // Println formats the given operands with space separation to the log ring.
@@ -40,10 +42,18 @@ func Println(a ...interface{}) (n int, err error) {
 }
 
 // Trace provides filtered println to log ring.
-func Trace(id Id, v ...interface{}) {
-	if id < NpduIds && unfilter[id] {
-		Println(v...)
+func Trace(v ...interface{}) (n int, err error) {
+	var id Id
+	var ok bool
+	for _, t := range v {
+		if id, ok = t.(Id); ok {
+			break
+		}
 	}
+	if ok && id < Nids && unfilter[id] {
+		n, err = Println(v...)
+	}
+	return
 }
 
 // TraceResize empties; then resizes the trace ring.
@@ -92,10 +102,10 @@ func TraceFlush(out io.Writer) {
 	}
 }
 
-// TraceFilter PDUs of the given Id; an Id of NpduIds filters all.
+// TraceFilter PDUs of the given Id; an Id of Nids filters all.
 // By default, all PDU types are filtered.
 func TraceFilter(id Id) {
-	if id < NpduIds {
+	if id < Nids {
 		unfilter[id] = false
 	} else {
 		for i, _ := range unfilter {
@@ -104,9 +114,9 @@ func TraceFilter(id Id) {
 	}
 }
 
-// TraceUnfilter PDUs of the given Id; an Id of NpduIds unfilters all.
+// TraceUnfilter PDUs of the given Id; an Id of Nids unfilters all.
 func TraceUnfilter(id Id) {
-	if id < NpduIds {
+	if id < Nids {
 		unfilter[id] = true
 	} else {
 		for i, _ := range unfilter {
