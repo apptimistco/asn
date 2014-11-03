@@ -6,19 +6,16 @@
 Package adm provides a command line ASN administrator.
 It's methods are also used for progromatic ASN testing.
 
-Usage: asnadm CONFIG [SERVER] [COMMAND [ARGUMENTS...]]
+Usage: asnadm CONFIG[:SERVER] [COMMAND [ARGUMENTS...]]
 
 Exmples:
 
-	$ asnadm siren 0 echo hello world
-	$ asnadm siren 1 echo hello world
-	$ asnadm siren sf echo hello world
+	$ asnadm siren.yaml echo hello world
+	$ asnadm siren.yaml:1 echo hello world
+	$ asnadm siren.yaml:sf echo hello world
 
-Or if CONFIG has a single server,
-
-	$ asnadm siren echo hello world
-
-See github.com/apptimistco/asn/adm/config for CONFIG.
+For CONFIG format, see:
+	$ godoc github.com/apptimistco/asn Config
 */
 package adm
 
@@ -27,10 +24,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/apptimistco/asn"
-	"github.com/apptimistco/asn/adm/config"
-	"github.com/apptimistco/box"
-	"github.com/apptimistco/encr"
-	"github.com/apptimistco/url"
 	"io"
 	"net"
 	"os"
@@ -42,16 +35,15 @@ import (
 )
 
 const (
-	Usage  = "Usage: asnadm CONFIG [SERVER] [COMMAND [ARGUMENTS...]]"
-	Inline = config.Inline
+	Usage = "Usage: asnadm CONFIG[:SERVER] [COMMAND [ARGUMENTS...]]"
 )
 
 var (
 	ErrUsage        = errors.New(Usage)
-	ErrNoServer     = errors.New("need server argument")
 	ErrNoSuchServer = errors.New("no such server")
 	ErrScheme       = errors.New("unsupported URL scheme")
 
+	Stdin  io.Reader = os.Stdin
 	Stdout io.Writer = os.Stdout
 	Stderr io.Writer = os.Stderr
 )
@@ -61,21 +53,24 @@ func Main(args ...string) (err error) {
 	if help(args...) {
 		return
 	}
-	if n := len(args); n < 2 {
-		return ErrUsage
-	}
-	if err = adm.Config(args[1]); err != nil {
+	if err = ErrUsage; len(args) < 1 {
 		return
 	}
+	config := args[1]
 	args = args[2:]
+	server := ""
+	colon := strings.Index(config, ":")
+	if colon > 0 {
+		config = config[:colon]
+		server = config[colon+1:]
+	}
+	if err = adm.Config(config); err != nil {
+		return
+	}
 	si := 0
 	if len(adm.config.Server) > 1 {
-		if len(args) == 0 {
-			return ErrNoServer
-		} else if si = serverIdx(adm.config, args[0]); si < 0 {
+		if si = serverIdx(adm.config, server); si < 0 {
 			return ErrNoSuchServer
-		} else {
-			args = args[1:]
 		}
 	}
 	if err = adm.Connect(si); err != nil {
@@ -83,7 +78,7 @@ func Main(args ...string) (err error) {
 	}
 	if err = adm.Login(); err == nil {
 		if len(args) > 0 {
-			err = adm.Cmd(args...)
+			err = adm.Exec(args...)
 		} else {
 			err = adm.Cli()
 		}
@@ -116,7 +111,7 @@ func help(args ...string) bool {
 	return false
 }
 
-func serverIdx(c *config.Config, s string) int {
+func serverIdx(c *asn.Config, s string) int {
 	i, err := strconv.Atoi(s)
 	if err == nil {
 		if i < 0 || i >= len(c.Server) {
@@ -133,13 +128,29 @@ func serverIdx(c *config.Config, s string) int {
 }
 
 type Adm struct {
-	config    *config.Config
+	config    *asn.Config
 	asn       *asn.ASN
 	ephemeral struct {
-		pub *encr.Pub
-		sec *encr.Sec
+		pub *asn.EncrPub
+		sec *asn.EncrSec
 	}
 	sigCh chan os.Signal
+}
+
+func (adm *Adm) AuthBlob() error {
+	return adm.Blob("asn/auth", (*adm.config.Keys.Admin.Pub.Auth)[:])
+}
+
+func (adm *Adm) Blob(name string, v interface{}) (err error) {
+	blob := asn.NewBlob(adm.config.Keys.Admin.Pub.Encr,
+		adm.config.Keys.Admin.Pub.Encr, name)
+	defer blob.Free()
+	pdu := asn.NewPDU()
+	if _, _, err = blob.SummingWriteContentsTo(pdu, v); err == nil {
+		adm.asn.Tx(pdu)
+		asn.Trace(adm.asn.Name, "Tx", asn.BlobId, name)
+	}
+	return
 }
 
 func (adm *Adm) Cli() error {
@@ -173,23 +184,25 @@ func (adm *Adm) Close() {
 	}
 }
 
-func (adm *Adm) Cmd(args ...string) error {
-	switch args[0] {
-	case "exec":
-		return adm.Exec(args[1:]...)
-	}
-	return errors.New("unknown command")
-}
-
 // Config[ure] the Adm from the named file or inline.
 func (adm *Adm) Config(s string) (err error) {
-	adm.config, err = config.New(s)
+	adm.config, err = asn.NewConfig(s)
+	if os.IsNotExist(err) {
+		adm.config, err = asn.NewConfig(s + ".yaml")
+	}
 	return
+}
+
+func (adm *Adm) DN() string {
+	return adm.config.Dir
 }
 
 // Connect to the si'th server listed in the configuration.
 func (adm *Adm) Connect(si int) (err error) {
 	var conn net.Conn
+	if si >= len(adm.config.Server) {
+		return ErrNoSuchServer
+	}
 	for t := 100 * time.Millisecond; true; t *= 2 {
 		conn, err = adm.dial(adm.config.Server[si].Url)
 		if conn != nil && err == nil {
@@ -203,11 +216,11 @@ func (adm *Adm) Connect(si int) (err error) {
 	if err != nil {
 		return
 	}
-	adm.ephemeral.pub, adm.ephemeral.sec, _ = encr.NewRandomKeys()
+	adm.ephemeral.pub, adm.ephemeral.sec, _ = asn.NewRandomEncrKeys()
 	conn.Write(adm.ephemeral.pub[:])
 	adm.asn = asn.NewASN()
 	adm.asn.Name = adm.config.Name + "[" + adm.config.Server[si].Name + "]"
-	adm.asn.SetBox(box.New(2,
+	adm.asn.SetBox(asn.NewBox(2,
 		adm.config.Keys.Nonce,
 		adm.config.Keys.Server.Pub.Encr,
 		adm.ephemeral.pub,
@@ -218,7 +231,7 @@ func (adm *Adm) Connect(si int) (err error) {
 	return
 }
 
-func (adm *Adm) dial(durl *url.URL) (net.Conn, error) {
+func (adm *Adm) dial(durl *asn.URL) (net.Conn, error) {
 	switch scheme := durl.Scheme; scheme {
 	case "tcp":
 		addr, err := net.ResolveTCPAddr(scheme, durl.Host)
@@ -258,18 +271,26 @@ func (adm *Adm) Exec(args ...string) (err error) {
 	asn.ExecReqId.Version(v).WriteTo(pdu)
 	asn.NewRequesterString("exec").WriteTo(pdu)
 	pdu.Write([]byte(strings.Join(args, "\x00")))
-	// FIXME append STDIN if last arg --
+	if args[len(args)-1] == "-" {
+		pdu.Write([]byte{0}[:])
+		pdu.ReadFrom(Stdin)
+	}
 	adm.asn.Tx(pdu)
 	asn.Trace(adm.asn.Name, "Tx", asn.ExecReqId, strings.Join(args, " "))
 	pdu, err, _ = adm.UntilAck()
 	if pdu != nil {
 		pdu.WriteTo(Stdout)
-		if len(args) > 0 && args[0] == "echo" {
-			Stdout.Write([]byte{'\n'})
-		}
 		pdu.Free()
 	}
 	return
+}
+
+func (adm *Adm) IsAdmin(key *asn.EncrPub) bool {
+	return *key == *adm.config.Keys.Admin.Pub.Encr
+}
+
+func (adm *Adm) IsService(key *asn.EncrPub) bool {
+	return *key == *adm.config.Keys.Server.Pub.Encr
 }
 
 func (adm *Adm) Login() (err error) {
@@ -283,6 +304,8 @@ func (adm *Adm) Login() (err error) {
 	pdu.Write(key[:])
 	pdu.Write(sig[:])
 	adm.asn.Tx(pdu)
+	asn.Trace(adm.asn.Name, "Tx", asn.LoginReqId, key.String()[:8]+"...",
+		sig.String()[:8]+"...")
 	asn.Trace(adm.asn.Name, "Tx", asn.LoginReqId)
 	pdu, err, _ = adm.UntilAck()
 	adm.rekey(pdu)
@@ -304,13 +327,13 @@ func (adm *Adm) Pause() (err error) {
 }
 
 func (adm *Adm) rekey(pdu *asn.PDU) {
-	var peer encr.Pub
-	var nonce box.Nonce
+	var peer asn.EncrPub
+	var nonce asn.Nonce
 	if pdu != nil {
 		pdu.Read(peer[:])
 		pdu.Read(nonce[:])
 		pdu.Free()
-		adm.asn.SetBox(box.New(2, &nonce, &peer,
+		adm.asn.SetBox(asn.NewBox(2, &nonce, &peer,
 			adm.ephemeral.pub, adm.ephemeral.sec))
 		adm.asn.SetStateEstablished()
 	}
@@ -373,11 +396,43 @@ func (adm *Adm) UntilAck() (pdu *asn.PDU, err error, req asn.Requester) {
 			req.ReadFrom(pdu)
 			e.ReadFrom(pdu)
 			e.Internal(adm.asn.Version())
-			err = e.Error()
+			if err = e.Error(); err == nil {
+				asn.Trace(adm.asn.Name, "Rx", id, "OK")
+			} else if err == asn.ErrFailure {
+				var b [128]byte
+				n, _ := pdu.Read(b[:])
+				asn.Trace(adm.asn.Name, "Rx", id, "Error:",
+					string(b[:n]))
+			} else {
+				asn.Trace(adm.asn.Name, "Rx", id, err)
+			}
+			return
+		case asn.BlobId:
+			var blob *asn.Blob
+			if blob, err = asn.NewBlobFrom(pdu); err != nil {
+				pdu.Free()
+				pdu = nil
+				return
+			}
+			pdu.Rewind()
+			sum := asn.NewSumOf(pdu)
+			blobFN := asn.BlobFN(adm, sum)
+			_, staterr := os.Stat(blobFN)
+			if !os.IsExist(staterr) {
+				asn.MkReposPath(blobFN)
+				pdu.SaveAs(blobFN)
+				// FIXME need to link it too
+			} else {
+				pdu.Free()
+			}
+			blob.Free()
 			return
 		default:
-			fmt.Println("fixme", adm.asn.Name, "Rx", id)
+			asn.Trace(adm.asn.Name, "Rx", id)
 			pdu.Free()
+			pdu = nil
+			err = asn.ErrUnsupported
+			return
 		}
 
 	}

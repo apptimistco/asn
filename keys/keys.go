@@ -26,9 +26,7 @@ Package keys provides random server and admin keys for an ASN service.
 package keys
 
 import (
-	"github.com/apptimistco/auth"
-	"github.com/apptimistco/box"
-	"github.com/apptimistco/encr"
+	"github.com/apptimistco/asn"
 	"gopkg.in/yaml.v1"
 	"io"
 	"os"
@@ -42,7 +40,7 @@ func Main(args ...string) (err error) {
 	if help(args...) {
 		return
 	}
-	m := struct{ Keys *Keys }{}
+	m := struct{ Keys *asn.Keys }{}
 	m.Keys, err = New()
 	if err != nil {
 		return
@@ -52,6 +50,7 @@ func Main(args ...string) (err error) {
 		return
 	}
 	Stdout.Write(b)
+	m.Keys.Clean()
 	return
 }
 
@@ -67,82 +66,20 @@ func help(args ...string) bool {
 	return false
 }
 
-type Pub struct {
-	Encr *encr.Pub
-	Auth *auth.Pub
-}
-
-type Sec struct {
-	Encr *encr.Sec
-	Auth *auth.Sec
-}
-
-type Quad struct {
-	Pub *Pub
-	Sec *Sec `yaml:"sec,omitempty"`
-}
-
-type Keys struct {
-	Admin  *Quad
-	Server *Quad
-	Nonce  *box.Nonce
-}
-
-func New() (k *Keys, err error) {
-	k = &Keys{
-		Admin:  &Quad{&Pub{}, &Sec{}},
-		Server: &Quad{&Pub{}, &Sec{}},
-	}
-	k.Admin.Pub.Encr, k.Admin.Sec.Encr, err = encr.NewRandomKeys()
+func New() (k *asn.Keys, err error) {
+	admq, err := asn.NewQuad()
 	if err != nil {
 		return
 	}
-	k.Admin.Pub.Auth, k.Admin.Sec.Auth, err = auth.NewRandomKeys()
+	srvq, err := asn.NewQuad()
 	if err != nil {
 		return
 	}
-	k.Server.Pub.Encr, k.Server.Sec.Encr, err = encr.NewRandomKeys()
-	if err != nil {
-		return
-	}
-	k.Server.Pub.Auth, k.Server.Sec.Auth, err = auth.NewRandomKeys()
-	if err != nil {
-		return
+	k = &asn.Keys{
+		Admin:  admq,
+		Server: srvq,
 	}
 	sig := k.Server.Sec.Auth.Sign(k.Server.Pub.Encr[:])
-	k.Nonce, err = box.Noncer(sig)
+	k.Nonce, err = asn.Noncer(sig)
 	return
-}
-
-// Clean empties the key.
-func (k *Keys) Clean() {
-	if k != nil {
-		if k.Admin != nil {
-			if k.Admin.Pub != nil {
-				k.Admin.Pub.Encr = nil
-				k.Admin.Pub.Auth = nil
-				k.Admin.Pub = nil
-			}
-			if k.Admin.Sec != nil {
-				k.Admin.Sec.Encr = nil
-				k.Admin.Sec.Auth = nil
-				k.Admin.Sec = nil
-			}
-			k.Admin = nil
-		}
-		if k.Server != nil {
-			if k.Server.Pub != nil {
-				k.Server.Pub.Encr = nil
-				k.Server.Pub.Auth = nil
-				k.Server.Pub = nil
-			}
-			if k.Server.Sec != nil {
-				k.Server.Sec.Encr = nil
-				k.Server.Sec.Auth = nil
-				k.Server.Sec = nil
-			}
-			k.Server = nil
-		}
-		k.Nonce = nil
-	}
 }

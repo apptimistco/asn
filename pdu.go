@@ -17,8 +17,12 @@ func FlushPDU() {
 }
 
 func NewPDU() *PDU {
-	Diag.Output(2, "pdu alloc")
 	return (*PDU)(datum.Pull())
+}
+
+func OpenPDU(fn string) (*PDU, error) {
+	d, err := datum.Open(fn)
+	return (*PDU)(d), err
 }
 
 func (pdu *PDU) Free() {
@@ -51,6 +55,14 @@ func (pdu *PDU) Reset() {
 
 func (pdu *PDU) Rewind() error {
 	return (*datum.Datum)(pdu).Rewind()
+}
+
+func (pdu *PDU) SaveAs(name string) {
+	Diag.Output(2, "pdu saved")
+	if pdu != nil {
+		d := (*datum.Datum)(pdu)
+		datum.SaveAs(&d, name)
+	}
 }
 
 func (pdu *PDU) Write(b []byte) (int, error) {

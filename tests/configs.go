@@ -6,15 +6,16 @@ package tests
 
 import (
 	"bytes"
-	"github.com/apptimistco/asn/adm"
 	"github.com/apptimistco/asn/keys"
-	"github.com/apptimistco/asn/srv"
+	"io/ioutil"
+	"os"
 	"text/template"
 )
 
 var (
 	// common ASN test configurations
-	admTmpl = template.Must(template.New("adm").Parse(adm.Inline + `
+	AdmConfigFN = "siren-adm.yaml"
+	AdmTmpl     = template.Must(template.New("adm").Parse(`
 name: siren-adm
 dir: siren-adm.asn
 lat: 37.774929
@@ -46,7 +47,8 @@ server:
   lat: 34.052234
   lon: -118.243684
 `))
-	srvTmpl = template.Must(template.New("srv").Parse(srv.Inline + `
+	SrvConfigFN = "siren-sf.yaml"
+	SrvTmpl     = template.Must(template.New("srv").Parse(`
 name: siren-sf
 dir: siren-sf.asn
 lat: 37.774929
@@ -72,17 +74,17 @@ listen:
 `))
 )
 
-func Configs() (adm, srv string) {
-	k, err := keys.New()
-	if err != nil {
+func WriteConfigs() {
+	if _, err := os.Stat(SrvConfigFN); os.IsExist(err) {
 		return
 	}
-	admConfigBuffer := &bytes.Buffer{}
-	srvConfigBuffer := &bytes.Buffer{}
-	admTmpl.Execute(admConfigBuffer, k)
-	srvTmpl.Execute(srvConfigBuffer, k)
-	adm = string(admConfigBuffer.Bytes())
-	srv = string(srvConfigBuffer.Bytes())
-	k.Clean()
-	return
+	if k, err := keys.New(); err == nil {
+		admConfigBuffer := &bytes.Buffer{}
+		srvConfigBuffer := &bytes.Buffer{}
+		AdmTmpl.Execute(admConfigBuffer, k)
+		SrvTmpl.Execute(srvConfigBuffer, k)
+		ioutil.WriteFile(AdmConfigFN, admConfigBuffer.Bytes(), 0660)
+		ioutil.WriteFile(SrvConfigFN, srvConfigBuffer.Bytes(), 0660)
+		k.Clean()
+	}
 }

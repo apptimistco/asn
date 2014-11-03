@@ -16,12 +16,14 @@ const (
 
 type Sum [SumSz]uint8
 
-// NewSum from given []byte or named file
+// NewSum of []byte
 func NewSumBytes(b []byte) Sum {
 	return Sum(sha512.Sum512(b))
 }
 
-func NewSumReader(r io.Reader) (sum Sum) {
+// NewSumFrom reader
+func NewSumOf(r io.Reader) (sum *Sum) {
+	sum = new(Sum)
 	h := sha512.New()
 	io.Copy(h, r)
 	copy(sum[:], h.Sum([]byte{}))

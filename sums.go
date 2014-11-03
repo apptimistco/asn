@@ -6,20 +6,15 @@ package asn
 
 import "io"
 
-type ReadLener interface {
-	io.Reader
-	Len() int
-}
-
 type Sums []Sum
 
 // Sums{}.ReadFrom *after* Name{}.ReadFrom
-func (p *Sums) ReadFrom(rl ReadLener) (n int64, err error) {
-	nsums := rl.Len() / SumSz
+func (p *Sums) ReadFrom(r LenReader) (n int64, err error) {
+	nsums := r.Len() / SumSz
 	*p = make(Sums, 0, nsums)
 	for i := 0; i < nsums; i++ {
 		var sum Sum
-		ni, rerr := rl.Read(sum[:])
+		ni, rerr := r.Read(sum[:])
 		if rerr != nil {
 			err = rerr
 			return

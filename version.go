@@ -9,9 +9,13 @@ import (
 	"strconv"
 )
 
-const Latest = 0
-
 type Version uint8
+
+const (
+	Latest     = Version(0)
+	VersionOff = int64(0)
+	VersionSz  = 1
+)
 
 func (p *Version) ReadFrom(r io.Reader) (n int64, err error) {
 	var b [1]byte
@@ -22,6 +26,7 @@ func (p *Version) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	return
 }
+
 func (v Version) String() string {
 	return strconv.Itoa(int(v))
 }

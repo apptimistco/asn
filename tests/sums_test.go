@@ -26,11 +26,12 @@ func TestSums(t *testing.T) {
 			if f, err := os.Open(fi.Name()); err != nil {
 				t.Error(err)
 			} else {
-				sum := asn.NewSumReader(f)
-				out = append(out, sum)
+				sum := asn.NewSumOf(f)
+				out = append(out, *sum)
 				if testing.Verbose() {
 					println(fi.Name(), "\t", sum.String())
 				}
+				sum = nil
 			}
 		}
 	}

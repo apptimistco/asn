@@ -76,11 +76,6 @@ func TraceResize(n int) {
 	ringSize = n
 }
 
-// WriterStringer is a wrapper of anything providing the WriteString method.
-type WriteStringer interface {
-	WriteString(string) (int, error)
-}
-
 // TraceFlush writes; then empties the trace ring buffer.
 func TraceFlush(out io.Writer) {
 	ringMutex.Lock()

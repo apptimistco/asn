@@ -5,40 +5,120 @@
 package asn
 
 import (
-	"github.com/apptimistco/nbo"
+	"encoding/binary"
+	"encoding/hex"
 	"io"
+	"os"
+	"strconv"
 )
 
-const MarkString = "asn/mark"
-
-var MarkName = Name(MarkString)
+const (
+	MarkFN        = "asn/mark"
+	MarkSz        = 8
+	MarkeySz      = 8
+	MarkETAMask   = uint8(0x0f)
+	MarkPlaceMask = uint8(0x70)
+	MarkPlaceFlag = uint8(0x70)
+	MarkPlaceSz   = 7
+	MDegree       = 1000000
+)
 
 type Mark struct {
-	Lat, Lon, Ele float64
+	Key Markey
+	Loc MarkLoc
+}
+type MarkLoc [MarkSz]byte
+type MarkPlace []byte
+type MarkLL struct{ Lat, Lon float64 }
+type Markey [MarkeySz]byte
+
+// MLL returns the mark's latitude and longitude in degree millionths
+func (m *Mark) MLL() (mlat, mlon int32) {
+	mlat = int32(binary.BigEndian.Uint32(m.Loc[:4]))
+	mlon = int32(binary.BigEndian.Uint32(m.Loc[4:]))
+	return
 }
 
-// Mark{}.ReadFrom *after* Name{}.ReadFrom
+// LL returns the mark's floating point latitude and longitude
+func (m *Mark) LL() (ll MarkLL) {
+	mlat, mlon := m.MLL()
+	ll.Lat = float64(mlat) / MDegree
+	ll.Lon = float64(mlon) / MDegree
+	return
+}
+
+func (m *Mark) IsPlace() bool {
+	return (m.Loc[0] & MarkPlaceMask) == MarkPlaceFlag
+}
+
+func (m *Mark) ETA() uint8 {
+	return uint8(m.Loc[0] & MarkETAMask)
+}
+
+func (m *Mark) Place() MarkPlace {
+	return m.Loc[1:]
+}
+
 func (m *Mark) ReadFrom(r io.Reader) (n int64, err error) {
-	for _, pf := range []*float64{&m.Lat, &m.Lon, &m.Ele} {
-		var ni int
-		ni, err = (nbo.Reader{r}).ReadNBO(pf)
-		if err != nil {
-			return
+	var x N
+	defer func() {
+		n = int64(x)
+	}()
+	if err = x.Plus(r.Read(m.Key[:])); err != nil {
+		return
+	}
+	err = x.Plus(r.Read(m.Loc[:]))
+	return
+}
+
+// SETPlace USER, PLACE, "7?"
+func (m *Mark) SetPlace(user, place *EncrPub, flageta string) (err error) {
+	copy(m.Key[:], user[:MarkeySz])
+	b, err := hex.DecodeString(flageta)
+	if err != nil {
+		return
+	}
+	m.Loc[0] = b[0]
+	copy(m.Loc[1:], place[:MarkPlaceSz])
+	return
+}
+
+// SetLL USER, LAT, LON
+func (m *Mark) SetLL(user *EncrPub, args ...string) (err error) {
+	if len(args) != 2 {
+		err = os.ErrInvalid
+		return
+	}
+	copy(m.Key[:], user[:MarkeySz])
+	for i, arg := range args[:2] {
+		var f float64
+		if f, err = strconv.ParseFloat(arg, 64); err != nil {
+			break
 		}
-		n += int64(ni)
+		beg := i * 4
+		end := beg + 4
+		u := uint32((int32(f * 1000000)))
+		binary.BigEndian.PutUint32(m.Loc[beg:end], u)
 	}
 	return
 }
 
-// Mark{}.WriteTo *after* MarkName.WriteTo
+func (p MarkPlace) String() string {
+	return hex.EncodeToString(p)
+}
+
+func (k Markey) String() string {
+	return hex.EncodeToString(k[:])
+}
+
 func (m *Mark) WriteTo(w io.Writer) (n int64, err error) {
-	for _, f := range []float64{m.Lat, m.Lon, m.Ele} {
-		var ni int
-		ni, err = (nbo.Writer{w}).WriteNBO(f)
-		if err != nil {
-			return
-		}
-		n += int64(ni)
+	var x N
+	defer func() {
+		n = int64(x)
+	}()
+	if err = x.Plus(w.Write(m.Key[:])); err != nil {
+		return
 	}
+	err = x.Plus(w.Write(m.Loc[:]))
 	return
 }

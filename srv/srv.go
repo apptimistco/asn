@@ -2,15 +2,18 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package srv provides an ASN server.
-//
-// Usage: asnsrv CONFIG
-//
-// This flushes the PDU trace to the configured log with SIGUSR1; stops all
-// listeners with SIGTERM; and stops both listeners and accepted connections
-// with SIGINT.
-//
-// See github.com/apptimistco/asn/srv/config for CONFIG.
+/*
+Package srv provides an ASN server.
+
+Usage: asnsrv CONFIG
+
+This flushes the PDU trace to the configured log with SIGUSR1; stops all
+listeners with SIGTERM; and stops both listeners and accepted connections
+with SIGINT.
+
+For CONFIG format, see:
+	$ godoc github.com/apptimistco/asn Config
+*/
 package srv
 
 import (
@@ -18,8 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/apptimistco/asn"
-	"github.com/apptimistco/asn/srv/config"
-	"github.com/apptimistco/box"
+	"io"
 	"io/ioutil"
 	"log"
 	"log/syslog"
@@ -33,63 +35,80 @@ import (
 )
 
 const (
-	Usage  = "Usage: asnsrv CONFIG"
-	ldl    = 100 * time.Millisecond
-	Inline = config.Inline
+	Usage = "Usage: asnsrv CONFIG"
+	ldl   = 100 * time.Millisecond
 )
 
 var (
+	Stdin  io.Reader = os.Stdin
+	Stdout io.Writer = os.Stdout
+	Stderr io.Writer = os.Stderr
+
 	ErrUsage = errors.New(Usage)
 	mutex    = &sync.Mutex{}
-	rxers    = [asn.Nids]func(*server, *ses, *asn.PDU) error{
-		asn.ExecReqId:   rxExec,
-		asn.LoginReqId:  rxLogin,
-		asn.PauseReqId:  rxPause,
-		asn.ResumeReqId: rxResume,
-		asn.QuitReqId:   rxQuit,
-
-		asn.BlobId:  rxBlob,
-		asn.IndexId: rxIndex,
-	}
-	servers []*server
+	servers  []*Server
+	// CleanRepos is only used in testing;
+	// it isn't a command flag
+	CleanRepos = false
 )
 
 func init() {
-	servers = make([]*server, 0)
+	servers = make([]*Server, 0)
 }
 
 func Main(args ...string) (err error) {
 	if help(args...) {
 		return
 	}
-	if len(args) != 2 {
+	if len(args) < 2 {
 		err = ErrUsage
 		return
 	}
-	srv := &server{
+	syscall.Umask(0007)
+	srv := &Server{
 		sig:       make(chan os.Signal, 1),
 		listeners: make([]*srvListener, 0),
-		sessions:  make([]*ses, 0),
+		sessions:  make([]*Ses, 0),
 		mutex:     &sync.Mutex{},
 	}
-	if srv.config, err = config.New(args[1]); err != nil {
+	srv.Config, err = asn.NewConfig(args[1])
+	if os.IsNotExist(err) {
+		srv.Config, err = asn.NewConfig(args[1] + ".yaml")
+	}
+	if err != nil {
 		return
 	}
-	if err = srv.newLogger(); err != nil {
+	if err = srv.loggerOpen(); err != nil {
 		return
 	}
-	if err = srv.WritePidFile(); err != nil {
+	if err = srv.pidFileWrite(); err != nil {
 		return
 	}
 	defer func() {
 		if err != nil {
 			srv.log.Println("ERROR", err)
 		}
-		srv.RemovePidFile()
-		srv.closeLogger()
+		srv.pidFileRemove()
+		srv.loggerClose()
 	}()
-	addSrv(srv)
-	if err = srv.listen(); err != nil {
+	if len(args) > 2 {
+		ses := &Ses{srv: srv}
+		ses.Keys.Client.Login = *srv.Config.Keys.Admin.Pub.Encr
+		ses.asnsrv = true
+		v := ses.Exec(Stdin, args[2:]...)
+		err, _ = v.(error)
+		asn.AckOut(Stdout, v)
+		v = nil
+		return
+	}
+	if CleanRepos {
+		os.RemoveAll(srv.Config.Dir)
+	}
+	if srv.Users, err = asn.GetUsers(srv.Config.Dir); err != nil {
+		return
+	}
+	srvAdd(srv)
+	if err = srv.listenStart(); err != nil {
 		return
 	}
 	srv.log.Println("started", os.Getpid(), "with", len(srv.listeners),
@@ -99,18 +118,18 @@ func Main(args ...string) (err error) {
 		sig := <-srv.sig
 		srv.log.Println("caught", sig)
 		if srv.logf != nil {
-			srv.log.Println("PDU Trace...")
+			srv.log.Println("Trace...")
 			asn.TraceFlush(srv.logf)
 		}
 		if sig == syscall.SIGINT || sig == syscall.SIGTERM {
-			srv.stopListening()
+			srv.listenStop()
 		}
 		if sig == syscall.SIGINT {
 			srv.hangup()
 			break
 		}
 	}
-	delSrv(srv)
+	srvDel(srv)
 	asn.FlushASN()
 	asn.FlushPDU()
 	srv.log.Println("stopped")
@@ -150,13 +169,13 @@ func help(args ...string) bool {
 	return false
 }
 
-func addSrv(srv *server) {
+func srvAdd(srv *Server) {
 	mutex.Lock()
 	servers = append(servers, srv)
 	mutex.Unlock()
 }
 
-func delSrv(srv *server) {
+func srvDel(srv *Server) {
 	mutex.Lock()
 	for i := range servers {
 		if servers[i] == srv {
@@ -169,13 +188,14 @@ func delSrv(srv *server) {
 	mutex.Unlock()
 }
 
-type server struct {
-	config    *config.Config
+type Server struct {
+	Config    *asn.Config
 	log       *log.Logger
 	logf      *os.File
 	sig       chan os.Signal
 	listeners []*srvListener
-	sessions  []*ses
+	sessions  []*Ses
+	Users     []*asn.EncrPub
 	mutex     *sync.Mutex
 
 	listening struct {
@@ -184,42 +204,7 @@ type server struct {
 	}
 }
 
-func (srv *server) newLogger() (err error) {
-	switch srv.config.Log {
-	case "": // use syslog
-		srv.log, err = syslog.NewLogger(syslog.LOG_NOTICE, 0)
-		if err != nil {
-			return
-		}
-		srv.log.SetPrefix(srv.config.Name + " ")
-	case os.DevNull:
-		srv.log = log.New(ioutil.Discard, "", log.LstdFlags)
-	default:
-		srv.logf, err = os.Create(srv.config.Log)
-		if err != nil {
-			return
-		}
-		if err = srv.logf.Chmod(0664); err != nil {
-			return
-		}
-		srv.log = log.New(srv.logf, "", log.LstdFlags)
-	}
-	return
-}
-
-func (srv *server) closeLogger() {
-	if srv.logf != nil {
-		srv.logf.Close()
-	}
-}
-
-func (srv *server) addSes(ses *ses) {
-	srv.mutex.Lock()
-	srv.sessions = append(srv.sessions, ses)
-	srv.mutex.Unlock()
-}
-
-func (srv *server) delSes(ses *ses) {
+func (srv *Server) Free(ses *Ses) {
 	srv.mutex.Lock()
 	for i := range srv.sessions {
 		if srv.sessions[i] == ses {
@@ -229,59 +214,85 @@ func (srv *server) delSes(ses *ses) {
 			break
 		}
 	}
+	ses.Free()
 	srv.mutex.Unlock()
 }
 
-func (srv *server) handler(conn net.Conn) {
-	ses := pullSes()
-	defer pushSes(&ses)
-	srv.addSes(ses)
+func (srv *Server) handler(conn net.Conn) {
+	ses := srv.New()
 	defer func() {
-		srv.log.Println("closed", ses.peer.String()[:8]+"...")
-		srv.delSes(ses)
-		pushSes(&ses)
-		conn.Close()
+		ses.ASN.Println("closed")
+		srv.Free(ses)
 	}()
-	ses.asn.Name = srv.config.Name + "[unnamed]"
-	ses.asn.SetConn(conn)
-	conn.Read(ses.peer[:])
-	srv.log.Println("connected", ses.peer.String()[:8]+"...")
-	ses.asn.SetBox(box.New(2, srv.config.Keys.Nonce, &ses.peer,
-		srv.config.Keys.Server.Pub.Encr,
-		srv.config.Keys.Server.Sec.Encr))
+	ses.ASN.Name = srv.Config.Name + "[unnamed]"
+	ses.ASN.SetConn(conn)
+	conn.Read(ses.Keys.Client.Ephemeral[:])
+	ses.ASN.Println("connected",
+		ses.Keys.Client.Ephemeral.String()[:8]+"...")
+	ses.ASN.SetBox(asn.NewBox(2, srv.Config.Keys.Nonce,
+		&ses.Keys.Client.Ephemeral,
+		srv.Config.Keys.Server.Pub.Encr,
+		srv.Config.Keys.Server.Sec.Encr))
 	for {
 		var err error
 		var v asn.Version
 		var id asn.Id
-		pdu := <-ses.asn.RxQ
+		pdu := <-ses.ASN.RxQ
 		if pdu == nil {
 			break
 		}
 		v.ReadFrom(pdu)
-		if v > ses.asn.Version() {
-			ses.asn.SetVersion(v)
+		if v > ses.ASN.Version() {
+			ses.ASN.SetVersion(v)
 		}
 		id.ReadFrom(pdu)
-		if id.Internal(v); id >= asn.Nids {
-			err = asn.ErrIncompatible
-		} else {
-			asn.Trace(ses.asn.Name, "Rx", id)
-			if rx := rxers[id]; rx == nil {
-				err = asn.ErrUnsupported
+		switch id.Internal(v); id {
+		case asn.ExecReqId:
+			err = ses.RxExec(pdu)
+		case asn.LoginReqId:
+			err = ses.RxLogin(pdu)
+		case asn.PauseReqId:
+			err = ses.RxPause(pdu)
+		case asn.ResumeReqId:
+			err = ses.RxResume(pdu)
+		case asn.QuitReqId:
+			err = ses.RxQuit(pdu)
+		case asn.BlobId:
+			err = ses.RxBlob(pdu)
+		default:
+			if id >= asn.Nids {
+				err = asn.ErrIncompatible
 			} else {
-				err = rx(srv, ses, pdu)
+				err = asn.ErrUnsupported
 			}
+
 		}
-		pdu.Free()
 		if err != nil {
-			srv.log.Println("Error:", ses.asn.Name, err)
+			pdu.Free()
+			ses.ASN.Println("Error:", err)
 			break
 		}
 	}
 }
 
-func (srv *server) listen() error {
-	for _, lurl := range srv.config.Listen {
+func (srv *Server) hangup() {
+	for len(srv.sessions) > 0 {
+		srv.mutex.Lock()
+		ses := srv.sessions[0]
+		srv.mutex.Unlock()
+		ses.ASN.SetStateClosed()
+		for {
+			time.Sleep(100 * time.Millisecond)
+			if len(srv.sessions) == 0 || srv.sessions[0] != ses {
+				break
+			}
+		}
+	}
+	srv.sessions = nil
+}
+
+func (srv *Server) listenStart() error {
+	for _, lurl := range srv.Config.Listen {
 		l := &srvListener{
 			stop: make(chan struct{}, 1),
 			done: make(chan error, 1),
@@ -355,7 +366,7 @@ func (srv *server) listen() error {
 	return nil
 }
 
-func (srv *server) stopListening() {
+func (srv *Server) listenStop() {
 	for i, le := range srv.listeners {
 		if le.ws {
 			le.ln.Close()
@@ -371,34 +382,56 @@ func (srv *server) stopListening() {
 	srv.listeners = nil
 }
 
-func (srv *server) hangup() {
-	for len(srv.sessions) > 0 {
-		srv.mutex.Lock()
-		ses := srv.sessions[0]
-		srv.mutex.Unlock()
-		ses.asn.SetStateClosed()
-		for {
-			time.Sleep(100 * time.Millisecond)
-			if len(srv.sessions) == 0 || srv.sessions[0] != ses {
-				break
-			}
+func (srv *Server) loggerClose() {
+	if srv.logf != nil {
+		srv.logf.Close()
+	}
+}
+
+func (srv *Server) loggerOpen() (err error) {
+	switch srv.Config.Log {
+	case "": // use syslog
+		srv.log, err = syslog.NewLogger(syslog.LOG_NOTICE, 0)
+		if err != nil {
+			return
 		}
+		srv.log.SetPrefix(srv.Config.Name + " ")
+	case os.DevNull:
+		srv.log = log.New(ioutil.Discard, "", log.LstdFlags)
+	default:
+		srv.logf, err = os.Create(srv.Config.Log)
+		if err != nil {
+			return
+		}
+		if err = srv.logf.Chmod(0664); err != nil {
+			return
+		}
+		srv.log = log.New(srv.logf, "", log.LstdFlags)
 	}
-	srv.sessions = nil
+	return
 }
 
-func (srv *server) RemovePidFile() error {
-	if len(srv.config.Pid) == 0 {
-		return nil
-	}
-	return os.Remove(srv.config.Pid)
+func (srv *Server) New() (ses *Ses) {
+	srv.mutex.Lock()
+	ses = NewSes()
+	srv.sessions = append(srv.sessions, ses)
+	ses.srv = srv
+	srv.mutex.Unlock()
+	return
 }
 
-func (srv *server) WritePidFile() error {
-	if len(srv.config.Pid) == 0 {
+func (srv *Server) pidFileRemove() error {
+	if len(srv.Config.Pid) == 0 {
 		return nil
 	}
-	f, err := os.Create(srv.config.Pid)
+	return os.Remove(srv.Config.Pid)
+}
+
+func (srv *Server) pidFileWrite() error {
+	if len(srv.Config.Pid) == 0 {
+		return nil
+	}
+	f, err := os.Create(srv.Config.Pid)
 	if err != nil {
 		return err
 	}
@@ -410,32 +443,15 @@ func (srv *server) WritePidFile() error {
 	return nil
 }
 
-// listener extends the net.Listener interface with SetDeadline
-type listener interface {
-	// Accept waits for and returns the next connection to the listener.
-	Accept() (net.Conn, error)
-
-	// Close closes the listener.
-	// Any blocked Accept operations will be unblocked and return errors.
-	Close() error
-
-	// Addr returns the listener's network address.
-	Addr() net.Addr
-
-	// SetDeadline sets the deadline associated with the listener. A zero
-	// time value disables the deadline.
-	SetDeadline(time.Time) error
-}
-
 type srvListener struct {
-	ln    listener
+	ln    asn.Listener
 	stop  chan struct{}
 	done  chan error
 	ws    bool
 	clean string
 }
 
-func (l *srvListener) listen(srv *server) {
+func (l *srvListener) listen(srv *Server) {
 	for {
 		select {
 		case <-l.stop:
@@ -452,7 +468,7 @@ func (l *srvListener) listen(srv *server) {
 				go srv.handler(conn)
 			} else if opErr, ok := err.(*net.OpError); !ok ||
 				!opErr.Timeout() {
-				srv.log.Println("Accept error:", err)
+				asn.Println("Accept error:", err)
 			}
 		}
 	}

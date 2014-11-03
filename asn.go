@@ -6,8 +6,6 @@ package asn
 
 import (
 	"errors"
-	"github.com/apptimistco/box"
-	"github.com/apptimistco/nbo"
 	"io"
 	"net"
 	"os"
@@ -34,10 +32,24 @@ var asnPool chan *ASN
 
 func init() { asnPool = make(chan *ASN, 16) }
 
+// N is a wrapper with a pointer receiver method to sum results of Read,
+// ReadFrom, Write and WriteTo signatures.
+type N int64
+
+// Plus adds int or int64 results to pointer receiver.
+func (n *N) Plus(v interface{}, err error) error {
+	if i, ok := v.(int); ok {
+		*n += N(i)
+	} else if x, ok := v.(int64); ok {
+		*n += N(x)
+	}
+	return err
+}
+
 // Pair box and pdu to support reset of box after Ack of Login
 type pdubox struct {
 	pdu *PDU
-	box *box.Box
+	box *Box
 }
 
 type ASN struct {
@@ -48,7 +60,7 @@ type ASN struct {
 	// State may be { opened, established, suspended, quitting }
 	state uint8
 	// Keys to Open/Seal
-	box  *box.Box
+	box  *Box
 	RxQ  chan *PDU
 	txq  chan pdubox
 	conn net.Conn
@@ -147,7 +159,12 @@ flush: // flush queues
 func (asn *ASN) Ack(req Requester, argv ...interface{}) {
 	var err error
 	if len(argv) == 1 {
-		err, _ = argv[0].(error)
+		switch t := argv[0].(type) {
+		case error:
+			err = t
+		case nil:
+			argv = argv[1:]
+		}
 	}
 	pdu := NewPDU()
 	v := asn.version
@@ -159,20 +176,34 @@ func (asn *ASN) Ack(req Requester, argv ...interface{}) {
 		ErrFromError(err).Version(v).WriteTo(pdu)
 		pdu.Write([]byte(err.Error()))
 	} else {
-		Trace(asn.Name, AckReqId, req, Success)
+		Trace(asn.Name, "Tx", AckReqId, req, Success)
 		Success.Version(v).WriteTo(pdu)
-		for _, v := range argv {
-			switch t := v.(type) {
-			case []byte:
-				pdu.Write(t)
-			case string:
-				pdu.Write([]byte(t))
-			case func(io.Writer):
-				t(pdu)
-			}
-		}
+		AckOut(pdu, argv...)
 	}
 	asn.Tx(pdu)
+}
+
+func AckOut(w io.Writer, argv ...interface{}) {
+	for _, v := range argv {
+		switch t := v.(type) {
+		case []byte:
+			w.Write(t)
+		case string:
+			w.Write([]byte(t))
+		case func(io.Writer):
+			t(w)
+		case []*os.File:
+			for i, f := range t {
+				io.Copy(w, f)
+				f.Close()
+				t[i] = nil
+			}
+		case *Sum:
+			w.Write([]byte(t.String()))
+			w.Write([]byte("\n"))
+		}
+		v = nil
+	}
 }
 
 func (asn *ASN) Conn() net.Conn      { return asn.conn }
@@ -196,7 +227,7 @@ pduLoop:
 	segLoop:
 		for {
 			var l uint16
-			if _, err = (nbo.Reader{asn}).ReadNBO(&l); err != nil {
+			if _, err = (NBOReader{asn}).ReadNBO(&l); err != nil {
 				break pduLoop
 			}
 			n := l & ^MoreFlag
@@ -227,16 +258,16 @@ pduLoop:
 	pdu.Free()
 	asn.RxQ <- nil
 	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-		Println("Error:", asn.Name, "Rx", err)
+		Println(asn.Name, "Error:", "Rx", err)
 	} else {
-		Println("Quit:", asn.Name)
+		Println(asn.Name, "Quit")
 	}
 }
 
 // pdutx pulls PDU from asn.txq, segments, and encrypts before sending
 // through asn.conn. This stops on error or nil.
 func (asn *ASN) pdutx() {
-	const maxBlack = MaxSegSz - box.Overhead
+	const maxBlack = MaxSegSz - BoxOverhead
 	var (
 		err error
 		pb  pdubox
@@ -269,7 +300,7 @@ pduLoop:
 			if pb.pdu.Len() > 0 {
 				l |= MoreFlag
 			}
-			if _, err = (nbo.Writer{asn}).WriteNBO(l); err != nil {
+			if _, err = (NBOWriter{asn}).WriteNBO(l); err != nil {
 				break segLoop
 			}
 			if _, err = asn.Write(b); err != nil {
@@ -295,6 +326,12 @@ pduLoop:
 	}
 }
 
+// Println formats the given operands with space separation to the log ring
+// prefixed by the ASN session Name.
+func (asn *ASN) Println(a ...interface{}) (n int, err error) {
+	return Println(append([]interface{}{asn.Name}, a...)...)
+}
+
 // Read full buffer from asn.conn unless preempted with state == closed.
 func (asn *ASN) Read(b []byte) (n int, err error) {
 	for i := 0; n < len(b); n += i {
@@ -315,7 +352,7 @@ func (asn *ASN) Read(b []byte) (n int, err error) {
 	return
 }
 
-func (asn *ASN) SetBox(box *box.Box) { asn.box = box }
+func (asn *ASN) SetBox(box *Box) { asn.box = box }
 
 // SetConn[ection] socket and start Go routines for PDU Q's
 func (asn *ASN) SetConn(conn net.Conn) {
