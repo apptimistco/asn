@@ -29,6 +29,10 @@ func BlobFN(repos Reposer, sum *Sum) string {
 	return filepath.Join(repos.DN(), s[:TopDNSz], s[TopDNSz:])
 }
 
+func MkReposDir(dn string) error {
+	return os.MkdirAll(dn, ReposPerm)
+}
+
 func MkReposPath(fn string) error {
 	return os.MkdirAll(filepath.Dir(fn), ReposPerm)
 }

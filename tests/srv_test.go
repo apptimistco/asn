@@ -20,6 +20,11 @@ var (
 	Once   sync.Once
 )
 
+func srvTestSetup() {
+	procflags()
+	WriteConfigs()
+}
+
 func procflags() {
 	if *Clean {
 		srv.CleanRepos = true
@@ -41,14 +46,12 @@ func asnadm(t *testing.T, args ...string) {
 }
 
 func TestArgs(t *testing.T) {
-	Once.Do(procflags)
-	Once.Do(WriteConfigs)
+	Once.Do(srvTestSetup)
 	t.Log("CleanRepos:", srv.CleanRepos)
 }
 
 func TestNoLoginEcho(t *testing.T) {
-	Once.Do(procflags)
-	Once.Do(WriteConfigs)
+	Once.Do(srvTestSetup)
 	go asnsrv(t, SrvConfigFN)
 	for i, s := range []string{"unix", "ws"} {
 		var adm adm.Adm
@@ -65,16 +68,14 @@ func TestNoLoginEcho(t *testing.T) {
 }
 
 func TestLoginEcho(t *testing.T) {
-	Once.Do(procflags)
-	Once.Do(WriteConfigs)
+	Once.Do(srvTestSetup)
 	go asnsrv(t, SrvConfigFN)
 	asnadm(t, AdmConfigFN, "echo", "hello", "world")
 	srv.KillAll(os.Interrupt)
 }
 
 func TestLoginTrace(t *testing.T) {
-	Once.Do(procflags)
-	Once.Do(WriteConfigs)
+	Once.Do(srvTestSetup)
 	go asnsrv(t, SrvConfigFN)
 	asnadm(t, AdmConfigFN, "trace", "flush")
 	srv.KillAll(os.Interrupt)
@@ -82,8 +83,7 @@ func TestLoginTrace(t *testing.T) {
 
 func TestSuspend(t *testing.T) {
 	var adm adm.Adm
-	Once.Do(procflags)
-	Once.Do(WriteConfigs)
+	Once.Do(srvTestSetup)
 	go asnsrv(t, SrvConfigFN)
 	if err := adm.Config(AdmConfigFN); err != nil {
 		t.Error(err)
@@ -109,8 +109,7 @@ func TestSuspend(t *testing.T) {
 
 func TestHelloBlob(t *testing.T) {
 	var adm adm.Adm
-	Once.Do(procflags)
-	Once.Do(WriteConfigs)
+	Once.Do(srvTestSetup)
 	go asnsrv(t, SrvConfigFN)
 	adm.Config(AdmConfigFN)
 	adm.Connect(0)
@@ -123,8 +122,7 @@ func TestHelloBlob(t *testing.T) {
 
 func TestHelloAgainBlob(t *testing.T) {
 	var adm adm.Adm
-	Once.Do(procflags)
-	Once.Do(WriteConfigs)
+	Once.Do(srvTestSetup)
 	go asnsrv(t, SrvConfigFN)
 	adm.Config(AdmConfigFN)
 	adm.Connect(0)
@@ -138,7 +136,7 @@ func TestHelloAgainBlob(t *testing.T) {
 
 func TestAuthBlob(t *testing.T) {
 	var adm adm.Adm
-	Once.Do(WriteConfigs)
+	Once.Do(srvTestSetup)
 	go asnsrv(t, SrvConfigFN)
 	adm.Config(AdmConfigFN)
 	adm.Connect(0)
@@ -151,8 +149,7 @@ func TestAuthBlob(t *testing.T) {
 
 func TestMessageBlobs(t *testing.T) {
 	var adm adm.Adm
-	Once.Do(procflags)
-	Once.Do(WriteConfigs)
+	Once.Do(srvTestSetup)
 	go asnsrv(t, SrvConfigFN)
 	adm.Config(AdmConfigFN)
 	adm.Connect(0)

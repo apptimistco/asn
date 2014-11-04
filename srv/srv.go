@@ -104,6 +104,11 @@ func Main(args ...string) (err error) {
 	if CleanRepos {
 		os.RemoveAll(srv.Config.Dir)
 	}
+	if _, err = os.Stat(srv.Config.Dir); os.IsNotExist(err) {
+		if err = asn.MkReposDir(srv.Config.Dir); err != nil {
+			return
+		}
+	}
 	if srv.Users, err = asn.GetUsers(srv.Config.Dir); err != nil {
 		return
 	}
