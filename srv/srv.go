@@ -91,6 +91,28 @@ func Main(args ...string) (err error) {
 		srv.pidFileRemove()
 		srv.loggerClose()
 	}()
+	if CleanRepos {
+		os.RemoveAll(srv.Config.Dir)
+	}
+	if srv.repos, err = asn.NewRepos(srv.Config.Dir); err != nil {
+		return
+	}
+	for _, q := range []*asn.Quad{
+		srv.Config.Keys.Admin,
+		srv.Config.Keys.Server,
+	} {
+		user := srv.repos.Users.Search(q.Pub.Encr)
+		if user == nil {
+			user, err = srv.repos.NewUser(q.Pub.Encr)
+			if err != nil {
+				return
+			}
+			user.ASN.Auth = *q.Pub.Auth
+			user.ASN.Author = *q.Pub.Encr
+		}
+		user = nil
+	}
+	defer srv.repos.Free()
 	if len(args) > 2 {
 		ses := &Ses{srv: srv}
 		ses.Keys.Client.Login = *srv.Config.Keys.Admin.Pub.Encr
@@ -99,17 +121,6 @@ func Main(args ...string) (err error) {
 		err, _ = v.(error)
 		asn.AckOut(Stdout, v)
 		v = nil
-		return
-	}
-	if CleanRepos {
-		os.RemoveAll(srv.Config.Dir)
-	}
-	if _, err = os.Stat(srv.Config.Dir); os.IsNotExist(err) {
-		if err = asn.MkReposDir(srv.Config.Dir); err != nil {
-			return
-		}
-	}
-	if srv.Users, err = asn.GetUsers(srv.Config.Dir); err != nil {
 		return
 	}
 	srvAdd(srv)
@@ -195,12 +206,12 @@ func srvDel(srv *Server) {
 
 type Server struct {
 	Config    *asn.Config
+	repos     *asn.Repos
 	log       *log.Logger
 	logf      *os.File
 	sig       chan os.Signal
 	listeners []*srvListener
 	sessions  []*Ses
-	Users     []*asn.EncrPub
 	mutex     *sync.Mutex
 
 	listening struct {
@@ -224,7 +235,7 @@ func (srv *Server) Free(ses *Ses) {
 }
 
 func (srv *Server) handler(conn net.Conn) {
-	ses := srv.New()
+	ses := srv.newSes()
 	defer func() {
 		ses.ASN.Println("closed")
 		srv.Free(ses)
@@ -416,7 +427,7 @@ func (srv *Server) loggerOpen() (err error) {
 	return
 }
 
-func (srv *Server) New() (ses *Ses) {
+func (srv *Server) newSes() (ses *Ses) {
 	srv.mutex.Lock()
 	ses = NewSes()
 	srv.sessions = append(srv.sessions, ses)

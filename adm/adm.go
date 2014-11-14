@@ -73,6 +73,10 @@ func Main(args ...string) (err error) {
 			return ErrNoSuchServer
 		}
 	}
+	if adm.repos, err = asn.NewRepos(adm.config.Dir); err != nil {
+		return
+	}
+	defer adm.repos.Free()
 	if err = adm.Connect(si); err != nil {
 		return
 	}
@@ -130,6 +134,7 @@ func serverIdx(c *asn.Config, s string) int {
 type Adm struct {
 	config    *asn.Config
 	asn       *asn.ASN
+	repos     *asn.Repos
 	ephemeral struct {
 		pub *asn.EncrPub
 		sec *asn.EncrSec
@@ -414,19 +419,19 @@ func (adm *Adm) UntilAck() (pdu *asn.PDU, err error, req asn.Requester) {
 				pdu = nil
 				return
 			}
-			pdu.Rewind()
-			sum := asn.NewSumOf(pdu)
-			blobFN := asn.BlobFN(adm, sum)
-			_, staterr := os.Stat(blobFN)
-			if !os.IsExist(staterr) {
-				asn.MkReposPath(blobFN)
-				pdu.SaveAs(blobFN)
-				// FIXME need to link it too
+			defer func() {
+				blob.Free()
+				blob = nil
+			}()
+			_, _, err = adm.repos.File(blob, pdu)
+			if err != nil {
+				asn.Trace(adm.asn.Name, "Rx", id, "Error:",
+					err)
 			} else {
-				pdu.Free()
+				asn.Trace(adm.asn.Name, "Rx", id, "OK")
 			}
-			blob.Free()
-			return
+			pdu.Free()
+			pdu = nil
 		default:
 			asn.Trace(adm.asn.Name, "Rx", id)
 			pdu.Free()

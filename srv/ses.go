@@ -7,7 +7,6 @@ package srv
 import (
 	"crypto/rand"
 	"github.com/apptimistco/asn"
-	"os"
 )
 
 type Ses struct {
@@ -87,30 +86,23 @@ func (ses *Ses) Rekey(req asn.Requester) {
 }
 
 func (ses *Ses) RxBlob(pdu *asn.PDU) (err error) {
+	defer func() {
+		pdu.Free()
+		pdu = nil
+	}()
 	blob, err := asn.NewBlobFrom(pdu)
 	if err != nil {
 		return
 	}
-	pdu.Rewind()
-	sum := asn.NewSumOf(pdu)
-	blobFN := asn.BlobFN(ses, sum)
-	_, staterr := os.Stat(blobFN)
-	if os.IsExist(staterr) {
+	defer func() {
 		blob.Free()
-		pdu.Free()
-		return
-	}
-	if err = asn.Permission(ses, blob, &ses.Keys.Client.Login,
-		&ses.Keys.Client.Ephemeral); err == nil {
-		ses.ASN.Println("Blob", blob.Name)
-		asn.MkReposPath(blobFN)
-		pdu.SaveAs(blobFN)
-		blob.Proc(ses, sum, blobFN, func(_ string, _ ...*asn.EncrPub) {
-			// FIXME
-		})
 		blob = nil
-		pdu = nil
-	}
+	}()
+	fns, sum, err := ses.srv.repos.File(blob, pdu)
+	defer func() { fns = nil }()
+	// FIXME dist fns
+	_ = fns
+	_ = sum
 	return
 }
 
@@ -139,8 +131,9 @@ func (ses *Ses) RxLogin(pdu *asn.PDU) (err error) {
 			err = nil
 		}
 	} else {
-		auth := asn.GetAsnAuth(ses, &ses.Keys.Client.Login)
-		if sig.Verify(&auth, ses.Keys.Client.Login[:]) {
+		user := ses.srv.repos.Users.Search(ses.Keys.Client.Login.String())
+		if user != nil &&
+			sig.Verify(&user.ASN.Auth, ses.Keys.Client.Login[:]) {
 			ses.ASN.Name = ses.srv.Config.Name + "[" +
 				ses.Keys.Client.Login.String()[:8] + "]"
 			err = nil

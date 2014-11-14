@@ -8,12 +8,9 @@ import (
 	"crypto/rand"
 	"crypto/sha512"
 	"errors"
+	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
-	"path/filepath"
-	"strings"
-	"syscall"
 	"time"
 )
 
@@ -53,6 +50,41 @@ func BlobTime(v interface{}) (t time.Time) {
 	}
 	f.Seek(BlobTimeOff, os.SEEK_SET)
 	(NBOReader{f}).ReadNBO(&t)
+	return
+}
+
+func ReadBlobContent(b []byte, fn string) (n int, err error) {
+	f, err := os.Open(fn)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	if _, err = SeekBlobContent(f); err != nil {
+		return
+	}
+	n, err = f.Read(b)
+	return
+}
+
+func ReadBlobKeyList(fn string) (keys []EncrPub, err error) {
+	f, err := os.Open(fn)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	pos, err := SeekBlobContent(f)
+	if err != nil {
+		return
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		return
+	}
+	n := int(fi.Size()-pos) / EncrPubSz
+	keys = make([]EncrPub, n)
+	for i := 0; i < n; i++ {
+		f.Read(keys[i][:])
+	}
 	return
 }
 
@@ -114,22 +146,9 @@ func NewBlobFrom(r io.Reader) (blob *Blob, err error) {
 	return
 }
 
-// File blob with v contents in repos returning file name, sum and any error.
-func (blob *Blob) File(repos Reposer, v interface{}) (fn string, sum *Sum,
-	err error) {
-	f, err := ioutil.TempFile(repos.DN(), "temp_")
-	if err != nil {
-		return
-	}
-	if sum, _, err = blob.SummingWriteContentsTo(f, v); err == nil {
-		fn = BlobFN(repos, sum)
-		MkReposPath(fn)
-		err = syscall.Link(f.Name(), fn)
-	}
-	tn := f.Name()
-	f.Close()
-	syscall.Unlink(tn)
-	return
+// FN returns a formatted file name of its time and abbreviated sum.
+func (blob *Blob) FN(sum string) string {
+	return fmt.Sprintf("%016x_%s", blob.Time.UnixNano(), sum[:16])
 }
 
 // Free the Blob by pooling or release it to GC if pool is full.
@@ -138,76 +157,6 @@ func (blob *Blob) Free() {
 		select {
 		case BlobPool <- blob:
 		default:
-		}
-	}
-}
-
-// Blobber links and redistributes blob files
-func (blob *Blob) Proc(repos Reposer, sum *Sum, fn string,
-	// send the named blob file to given or all users
-	send func(string, ...*EncrPub)) {
-	user := GetAsnUser(repos, &blob.Owner)
-	switch {
-	case blob.Name == "" ||
-		blob.Name == "asn/messages/" ||
-		blob.Name == "asn/messages":
-		if user != "bridge" {
-			var to []*EncrPub
-			sendto := func(keys ...*EncrPub) {
-				for _, k := range keys {
-					if !KeysHasKey(to, k) {
-						ln := UserPN(repos, k,
-							"asn", "messages",
-							sum.String()[:32])
-						MkReposPath(ln)
-						syscall.Link(fn, ln)
-						to = append(to, k)
-					}
-				}
-			}
-			// First link to sender
-			sendto(&blob.Author)
-			if moderators := GetAsnModerators(repos,
-				&blob.Owner); len(moderators) != 0 {
-				sendto(moderators...)
-				CleanKeys(moderators)
-				moderators = nil
-			} else if subscribers := GetAsnSubscribers(repos,
-				&blob.Owner); len(subscribers) != 0 {
-				sendto(subscribers...)
-				CleanKeys(subscribers)
-				subscribers = nil
-			} else if blob.Owner != blob.Author {
-				sendto(&blob.Owner)
-			}
-			send(fn, to...)
-		}
-		// FIXME bridge
-	case blob.Name == "asn/mark":
-		ln := UserPN(repos, &blob.Owner,
-			"asn", "messages", sum.String()[:32])
-		MkReposPath(ln)
-		syscall.Link(fn, ln)
-		send(fn)
-	case strings.HasSuffix(blob.Name, "/"):
-		ln := UserPN(repos, &blob.Owner,
-			filepath.FromSlash(blob.Name[:len(blob.Name)-1]),
-			sum.String()[:32])
-		MkReposPath(ln)
-		syscall.Link(fn, ln)
-	case blob.Name == "asn/removals":
-		// FIXME
-	case blob.Name == "asn/approvals":
-		// FIXME
-	default:
-		ln := UserPN(repos, &blob.Owner, filepath.FromSlash(blob.Name))
-		if blob.Time.After(BlobTime(ln)) {
-			FlagDeletion(ln)
-			syscall.Unlink(ln)
-			MkReposPath(ln)
-			syscall.Link(fn, ln)
-		} else { // older blob so flag it and don't link ref
-			FlagDeletion(fn)
 		}
 	}
 }

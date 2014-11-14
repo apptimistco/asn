@@ -37,7 +37,9 @@ const (
 	UsageObjDump = `objdump ` + BlobArg + `...`
 	UsageRM      = `rm ` + BlobArg + `...`
 	UsageTrace   = `trace [COMMAND [ARG]]`
+	UsageUsers   = `users`
 	UsageVouch   = `vouch USER SIG`
+	UsageWho     = `who`
 
 	HelpExec = `ASN exec commands:
     ` + UsageApprove + `
@@ -70,8 +72,12 @@ const (
 	Flag blobs for removal by garbage collector.
     ` + UsageTrace + `
 	Return and flush the PDU trace or manipulate its filter.
+    ` + UsageUsers + `
+	List all users.
     ` + UsageVouch + `
 	Vouch for or deny USER's identity.
+    ` + UsageWho + `
+	List logged in users.
 `
 )
 
@@ -90,7 +96,9 @@ var (
 	ErrUsageObjDump = errors.New("usage: " + UsageObjDump)
 	ErrUsageRM      = errors.New("usage: " + UsageRM)
 	ErrUsageTrace   = errors.New("usage: " + UsageTrace)
+	ErrUsageUsers   = errors.New("usage: " + UsageUsers)
 	ErrUsageVouch   = errors.New("usage: " + UsageVouch)
+	ErrUsageWho     = errors.New("usage: " + UsageWho)
 	ErrFIXME        = errors.New("FIXME")
 	ErrCantExec     = errors.New("asnsrv can't exec this command")
 )
@@ -155,8 +163,12 @@ func (ses *Ses) Exec(r io.Reader, args ...string) interface{} {
 		return ses.ExecRM(args[1:]...)
 	case "trace":
 		return ses.ExecTrace(args[1:]...)
+	case "users":
+		return ses.ExecUsers(args[1:]...)
 	case "vouch":
 		return ses.ExecVouch(args[1:]...)
+	case "who":
+		return ses.ExecWho(args[1:]...)
 	default:
 		return asn.ErrUnknown
 	}
@@ -167,45 +179,49 @@ func (ses *Ses) ExecApprove(args ...string) interface{} {
 }
 
 func (ses *Ses) ExecAuth(args ...string) interface{} {
-	var err error
-	owner := ses.Keys.Client.Login
+	author := ses.srv.repos.Users.Search(&ses.Keys.Client.Login)
+	owner := author
+	defer func() {
+		author = nil
+		owner = nil
+	}()
 	if len(args) > 2 && args[0] == "-u" {
-		if owner, err = asn.UniqueUser(ses, args[1]); err != nil {
-			return err
+		owner = ses.srv.repos.Users.Search(args[1])
+		if owner == nil {
+			return asn.ErrNOENT
 		}
 		args = args[2:]
 	}
 	if len(args) != 1 {
 		return ErrUsageAuth
 	}
-	if err = os.ErrInvalid; len(args[0]) != (asn.AuthPubSz * 2) {
-		return err
+	if len(args[0]) != (asn.AuthPubSz * 2) {
+		return os.ErrInvalid
 	}
-	pub, err := hex.DecodeString(args[0])
+	authPub, err := hex.DecodeString(args[0])
 	if err != nil {
 		return err
 	}
-	if err = os.ErrInvalid; len(pub) != asn.AuthPubSz {
-		return err
+	if len(authPub) != asn.AuthPubSz {
+		return os.ErrInvalid
 	}
-	blob := asn.NewBlob(&owner, &ses.Keys.Client.Login, "asn/auth")
-	defer blob.Free()
-	fn, sum, err := blob.File(ses, pub)
+	sum, err := ses.NewBlob(owner, author, "asn/auth", authPub)
 	if err != nil {
 		return err
 	}
-	blob.Proc(ses, sum, fn, func(_ string, _ ...*asn.EncrPub) {
-		// FIXME
-	})
 	return sum
 }
 
 func (ses *Ses) ExecBlob(r io.Reader, args ...string) interface{} {
-	var err error
+	author := ses.srv.repos.Users.Search(&ses.Keys.Client.Login)
+	owner := author
+	defer func() {
+		author = nil
+		owner = nil
+	}()
 	if len(args) != 1 {
 		return ErrUsageBlob
 	}
-	owner := ses.Keys.Client.Login
 	name := args[0]
 	slash := strings.Index(args[0], "/")
 	if asn.IsHex(args[0]) || (slash > 0 && asn.IsHex(name[:slash])) {
@@ -215,20 +231,15 @@ func (ses *Ses) ExecBlob(r io.Reader, args ...string) interface{} {
 		} else {
 			name = name[slash+1:]
 		}
-		owner, err = asn.UniqueUser(ses, args[0][:slash])
-		if err != nil {
-			return err
+		owner = ses.srv.repos.Users.Search(args[0][:slash])
+		if owner == nil {
+			return asn.ErrNOENT
 		}
 	}
-	blob := asn.NewBlob(&owner, &ses.Keys.Client.Login, name)
-	defer blob.Free()
-	fn, sum, err := blob.File(ses, r)
+	sum, err := ses.NewBlob(owner, author, name, r)
 	if err != nil {
 		return err
 	}
-	blob.Proc(ses, sum, fn, func(_ string, _ ...*asn.EncrPub) {
-		// FIXME
-	})
 	return sum
 }
 
@@ -284,6 +295,7 @@ func (ses *Ses) ExecClone(args ...string) interface{} {
 	if dir, err = ioutil.ReadDir(ses.srv.Config.Dir); err != nil {
 		return err
 	}
+	defer func() { dir = nil }()
 	for _, fi := range dir {
 		if fi.IsDir() && len(fi.Name()) == 2 {
 			subdn := filepath.Join(ses.srv.Config.Dir, fi.Name())
@@ -303,6 +315,7 @@ func (ses *Ses) ExecClone(args ...string) interface{} {
 					}
 				}
 			}
+			subdir = nil
 		}
 	}
 	return nil
@@ -373,10 +386,12 @@ func (ses *Ses) ExecGC(args ...string) interface{} {
 func (ses *Ses) ExecLS(args ...string) interface{} {
 	var out []byte
 	err := ses.Blobber(func(path string) error {
-		suser, path := asn.StripUserString(ses, path)
+		suser, path := ses.srv.repos.ParsePath(path)
 		if suser != "" && suser != ses.Keys.Client.Login.String() {
 			out = append(out, []byte(suser[:16])...)
-			out = append(out, os.PathSeparator)
+			if path != "" {
+				out = append(out, os.PathSeparator)
+			}
 		}
 		out = append(out, []byte(path)...)
 		out = append(out, '\n')
@@ -390,16 +405,17 @@ func (ses *Ses) ExecLS(args ...string) interface{} {
 }
 
 func (ses *Ses) ExecMark(args ...string) interface{} {
-	var (
-		err error
-		m   asn.Mark
-		sum *asn.Sum
-	)
-	user := ses.Keys.Client.Login
+	author := ses.srv.repos.Users.Search(&ses.Keys.Client.Login)
+	owner := author
+	defer func() {
+		author = nil
+		owner = nil
+	}()
+	var m asn.Mark
 	if len(args) > 2 && args[0] == "-u" {
-		user, err = asn.UniqueUser(ses, args[1])
-		if err != nil {
-			return err
+		owner = ses.srv.repos.Users.Search(args[1])
+		if owner == nil {
+			return asn.ErrNOENT
 		}
 		args = args[2:]
 	}
@@ -407,29 +423,30 @@ func (ses *Ses) ExecMark(args ...string) interface{} {
 		if len(args[0]) < 6 || args[0][0] != '7' {
 			return ErrUsageMark
 		}
-		place, err := asn.UniqueUser(ses, args[0][2:])
+		place := ses.srv.repos.Users.Search(args[0][2:])
+		if place == nil {
+			return asn.ErrNOENT
+		}
+		kplace, err := asn.NewEncrPubString(place.String)
 		if err != nil {
 			return err
 		}
-		if err = m.SetPlace(&user, &place, args[0][:2]); err != nil {
+		defer func() { kplace = nil }()
+		err = m.SetPlace(owner.Key, kplace, args[0][:2])
+		if err != nil {
 			return err
 		}
 	} else if nargs == 2 {
-		if err = m.SetLL(&user, args...); err != nil {
+		if err := m.SetLL(owner.Key, args...); err != nil {
 			return err
 		}
 	} else {
 		return ErrUsageMark
 	}
-	blob := asn.NewBlob(&user, &ses.Keys.Client.Login, "asn/mark")
-	defer blob.Free()
-	fn, sum, err := blob.File(ses, m)
+	sum, err := ses.NewBlob(owner, author, "asn/mark", m)
 	if err != nil {
 		return err
 	}
-	blob.Proc(ses, sum, fn, func(_ string, _ ...*asn.EncrPub) {
-		// FIXME
-	})
 	return sum
 }
 
@@ -437,6 +454,12 @@ func (ses *Ses) ExecNewUser(args ...string) interface{} {
 	if len(args) != 1 {
 		return ErrUsageNewUser
 	}
+	author := ses.srv.repos.Users.Search(&ses.Keys.Client.Login)
+	owner := author
+	defer func() {
+		author = nil
+		owner = nil
+	}()
 	q, err := asn.NewQuad()
 	if err != nil {
 		return err
@@ -449,33 +472,19 @@ func (ses *Ses) ExecNewUser(args ...string) interface{} {
 	if err != nil {
 		return err
 	}
-	blob := asn.NewBlob(q.Pub.Encr, &ses.Keys.Client.Login, "asn/auth")
-	defer blob.Free()
-	fn, sum, err := blob.File(ses, []byte(q.Pub.Auth[:]))
+	owner, err = ses.srv.repos.NewUser(q.Pub.Encr.String())
 	if err != nil {
 		return err
 	}
-	blob.Proc(ses, sum, fn, func(_ string, _ ...*asn.EncrPub) {
-		// FIXME
-	})
-	blob = asn.NewBlob(q.Pub.Encr, &ses.Keys.Client.Login, "asn/author")
-	defer blob.Free()
-	fn, sum, err = blob.File(ses, []byte(ses.Keys.Client.Login[:]))
+	_, err = ses.NewBlob(owner, author, "asn/auth", []byte(q.Pub.Auth[:]))
 	if err != nil {
 		return err
 	}
-	blob.Proc(ses, sum, fn, func(_ string, _ ...*asn.EncrPub) {
-		// FIXME
-	})
-	blob = asn.NewBlob(q.Pub.Encr, &ses.Keys.Client.Login, "asn/user")
-	defer blob.Free()
-	fn, sum, err = blob.File(ses, args[0])
+	_, err = ses.NewBlob(owner, author, "asn/author",
+		[]byte(author.Key[:]))
 	if err != nil {
 		return err
 	}
-	blob.Proc(ses, sum, fn, func(_ string, _ ...*asn.EncrPub) {
-		// FIXME
-	})
 	return out
 }
 
@@ -565,31 +574,46 @@ func (ses *Ses) ExecTrace(args ...string) interface{} {
 	}
 }
 
+func (ses *Ses) ExecUsers(args ...string) interface{} {
+	if len(args) != 0 {
+		return ErrUsageUsers
+	}
+	return ses.srv.repos.Users.LS()
+}
+
 func (ses *Ses) ExecVouch(args ...string) interface{} {
 	if len(args) != 2 {
 		return ErrUsageVouch
 	}
-	user, err := asn.UniqueUser(ses, args[0])
-	if err != nil {
-		return err
+	author := ses.srv.repos.Users.Search(&ses.Keys.Client.Login)
+	owner := ses.srv.repos.Users.Search(args[0])
+	if owner == nil {
+		return asn.ErrNOENT
 	}
+	defer func() {
+		author = nil
+		owner = nil
+	}()
 	sig, err := hex.DecodeString(args[1])
 	if err != nil {
 		return err
 	}
-	if err = os.ErrInvalid; len(sig) != asn.AuthSigSz {
-		return err
+	if len(sig) != asn.AuthSigSz {
+		return os.ErrInvalid
 	}
-	blob := asn.NewBlob(&user, &ses.Keys.Client.Login, "asn/vouchers/")
-	defer blob.Free()
-	fn, sum, err := blob.File(ses, sig)
+
+	sum, err := ses.NewBlob(owner, author, "asn/vouchers/", sig)
 	if err != nil {
 		return err
 	}
-	blob.Proc(ses, sum, fn, func(_ string, _ ...*asn.EncrPub) {
-		// FIXME
-	})
 	return sum
+}
+
+func (ses *Ses) ExecWho(args ...string) interface{} {
+	if len(args) != 0 {
+		return ErrUsageWho
+	}
+	return ErrFIXME
 }
 
 func BlobFilter(fn string, epoch time.Time,
@@ -617,56 +641,45 @@ func BlobFilter(fn string, epoch time.Time,
 func (ses *Ses) Blobber(f func(path string) error, args ...string) error {
 	var (
 		epoch time.Time
-		users *[]*asn.EncrPub
+		user  *asn.ReposUser
 	)
-	defaultUsers := []*asn.EncrPub{&ses.Keys.Client.Login}
+	login := ses.srv.repos.Users.Search(&ses.Keys.Client.Login)
+	server := ses.srv.Config.Keys.Server.Pub.Encr.String()
 	defer func() {
-		defaultUsers[0] = nil
+		user = nil
+		login = nil
 	}()
 	if len(args) == 0 {
 		args = []string{""}
 	}
 argLoop:
 	for _, arg := range args {
-		users = &defaultUsers
-		(*users)[0] = &ses.Keys.Client.Login
+		user = login
 		epoch, arg = StripEpoch(arg)
 		if _, err := os.Stat(arg); err == nil { // DIR or FILE
 			BlobFilter(arg, epoch, f)
 			continue argLoop
 		} else if asn.IsHex(arg) { // USER or SHA
-			fn, err := asn.UniqueENT(ses, arg)
-			if err != nil {
-				return err
-			}
-			if asn.IsUserENT(fn) { // USER
-				suser := asn.TopDN(arg) + fn
-				(*users)[0], err = asn.NewEncrPubString(suser)
-				if err != nil {
-					return err
-				}
+			user = ses.srv.repos.Users.Search(arg)
+			if user != nil {
 				arg = ""
+			} else if match, err :=
+				ses.srv.repos.Search(arg); err != nil {
+				return err
+			} else if match == "" {
+				return asn.ErrNOENT
 			} else { // SHA
-				BlobFilter(arg, epoch, f)
+				BlobFilter(match, epoch, f)
 				continue argLoop
 			}
 		} else if slash := strings.Index(arg, "/"); slash > 0 &&
 			asn.IsHex(arg[:slash]) { // USER/NAME
-			s := ses.srv.Config.Keys.Server.Pub.Encr.String()
-			if strings.HasPrefix(s, arg[:slash]) {
-				users = &ses.srv.Users
+			if strings.HasPrefix(server, arg[:slash]) {
+				user = nil // wildcard users
 			} else {
-				fn, err := asn.UniqueENT(ses, arg[:slash])
-				if err != nil {
-					return err
-				}
-				if !asn.IsUserENT(fn) {
+				user = ses.srv.repos.Users.Search(arg[:slash])
+				if user == nil {
 					return asn.ErrNOENT
-				}
-				suser := asn.TopDN(arg) + fn
-				(*users)[0], err = asn.NewEncrPubString(suser)
-				if err != nil {
-					return err
 				}
 			}
 			arg = arg[slash+1:]
@@ -674,26 +687,61 @@ argLoop:
 		if arg == "" {
 			arg = "*"
 		}
-		for _, user := range *users {
-			xn := asn.UserPN(ses, user, arg)
-			if matches, err := filepath.Glob(xn); err != nil {
-				return err
-			} else if len(matches) > 0 {
+		if user != nil {
+			xn := ses.srv.repos.Expand(user.String, arg)
+			matches, err := filepath.Glob(xn)
+			if len(matches) > 0 {
 				for _, match := range matches {
 					BlobFilter(match, epoch, f)
 				}
-			} else if len(*users) == 1 {
+			} else if err != nil {
+				return err
+			} else {
 				return os.ErrNotExist
+			}
+		} else {
+			for _, user := range ses.srv.repos.Users.Entry {
+				xn := ses.srv.repos.Expand(user.String, arg)
+				matches, err := filepath.Glob(xn)
+				if len(matches) > 0 {
+					for _, match := range matches {
+						BlobFilter(match, epoch, f)
+					}
+				} else if err != nil {
+					return err
+				}
 			}
 		}
 	}
 	return nil
 }
 
+func (ses *Ses) NewBlob(owner, author *asn.ReposUser, name string,
+	v interface{}) (sum *asn.Sum, err error) {
+	blob := asn.NewBlob(owner.Key, author.Key, name)
+	defer func() {
+		blob.Free()
+		blob = nil
+	}()
+	fns, sum, err := ses.srv.repos.File(blob, v)
+	defer func() { fns = nil }()
+	if err != nil {
+		return
+	}
+	// FIXME dist fns
+	return
+}
+
 func (ses *Ses) Summer(errusage error, name string, args ...string) interface{} {
 	if len(args) < 1 {
 		return errusage
 	}
+	author := ses.srv.repos.Users.Search(&ses.Keys.Client.Login)
+	owner := author
+	defer func() {
+		author = nil
+		owner = nil
+	}()
 	sums := make(asn.Sums, 0)
 	defer func() { sums = nil }()
 	err := ses.Blobber(func(path string) error {
@@ -709,16 +757,10 @@ func (ses *Ses) Summer(errusage error, name string, args ...string) interface{} 
 	if err != nil {
 		return err
 	}
-	blob := asn.NewBlob(&ses.Keys.Client.Login, &ses.Keys.Client.Login,
-		"asn/removals/")
-	defer blob.Free()
-	fn, sum, err := blob.File(ses, sums)
+	sum, err := ses.NewBlob(owner, author, name, sums)
 	if err != nil {
 		return err
 	}
-	blob.Proc(ses, sum, fn, func(_ string, _ ...*asn.EncrPub) {
-		// FIXME
-	})
 	return sum
 }
 
