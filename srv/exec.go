@@ -36,7 +36,6 @@ const (
 	UsageNewUser = `newuser <"actual"|"bridge"|"forum"|"place">`
 	UsageObjDump = `objdump ` + BlobArg + `...`
 	UsageRM      = `rm ` + BlobArg + `...`
-	UsageScan    = `scan LATITUDE LONGITUDE RANGE`
 	UsageTrace   = `trace [COMMAND [ARG]]`
 	UsageVouch   = `vouch USER SIG`
 
@@ -69,8 +68,6 @@ const (
 	Returns the decoded header of the named blob
     ` + UsageRM + `
 	Flag blobs for removal by garbage collector.
-    ` + UsageScan + `
-	Requests matching MARK blobs.
     ` + UsageTrace + `
 	Return and flush the PDU trace or manipulate its filter.
     ` + UsageVouch + `
@@ -92,7 +89,6 @@ var (
 	ErrUsageNewUser = errors.New("usage: " + UsageNewUser)
 	ErrUsageObjDump = errors.New("usage: " + UsageObjDump)
 	ErrUsageRM      = errors.New("usage: " + UsageRM)
-	ErrUsageScan    = errors.New("usage: " + UsageScan)
 	ErrUsageTrace   = errors.New("usage: " + UsageTrace)
 	ErrUsageVouch   = errors.New("usage: " + UsageVouch)
 	ErrFIXME        = errors.New("FIXME")
@@ -157,8 +153,6 @@ func (ses *Ses) Exec(r io.Reader, args ...string) interface{} {
 		return ses.ExecObjDump(args[1:]...)
 	case "rm":
 		return ses.ExecRM(args[1:]...)
-	case "scan":
-		return ses.ExecScan(args[1:]...)
 	case "trace":
 		return ses.ExecTrace(args[1:]...)
 	case "vouch":
@@ -553,26 +547,6 @@ func (ses *Ses) ExecObjDump(args ...string) interface{} {
 
 func (ses *Ses) ExecRM(args ...string) interface{} {
 	return ses.Summer(ErrUsageRM, "asn/removals/", args...)
-}
-
-func (ses *Ses) ExecScan(args ...string) interface{} {
-	var f float64
-	if len(args) != 3 {
-		return ErrUsageScan
-	}
-	if _, err := fmt.Sscanf(args[0], "%f", &f); err != nil {
-		return err
-	}
-	ses.Lat = int32(f * 1000000)
-	if _, err := fmt.Sscanf(args[1], "%f", &f); err != nil {
-		return err
-	}
-	ses.Lon = int32(f * 1000000)
-	if _, err := fmt.Sscanf(args[2], "%d", &ses.Range); err != nil {
-		return err
-	}
-	// FIXME send current locations
-	return nil
 }
 
 func (ses *Ses) ExecTrace(args ...string) interface{} {
