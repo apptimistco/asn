@@ -16,6 +16,9 @@ var Diag *log.Logger
 
 func init() {
 	name := fmt.Sprint("asn_", os.Getpid(), ".diag")
-	f, _ := os.Create(name)
+	f, err := os.Create(name)
+	if err != nil {
+		panic("can't create diag log file: " + err.Error())
+	}
 	Diag = log.New(f, "", log.Lshortfile)
 }
