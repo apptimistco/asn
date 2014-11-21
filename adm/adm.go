@@ -304,6 +304,28 @@ func (adm *Adm) Exec(args ...string) (err error) {
 	return
 }
 
+func (adm *Adm) File(pdu *asn.PDU) {
+	blob, err := asn.NewBlobFrom(pdu)
+	if err != nil {
+		asn.Diag.Println(adm.asn.Name, "Error:", err)
+		return
+	}
+	links, _, err := adm.asn.Repos.File(blob, pdu)
+	if err != nil {
+		asn.Diag.Println(adm.asn.Name, err)
+	}
+	for i := range links {
+		if links[i] != nil {
+			asn.Diag.Println(adm.asn.Name, "saved", links[i].FN)
+			links[i].Free()
+			links[i] = nil
+		}
+	}
+	links = nil
+	blob.Free()
+	blob = nil
+}
+
 func (adm *Adm) IsAdmin(key *asn.EncrPub) bool {
 	return *key == *adm.config.Keys.Admin.Pub.Encr
 }
@@ -445,27 +467,7 @@ func (adm *Adm) UntilAck() (pdu *asn.PDU, err error, req asn.Requester) {
 			err = e.ErrToError()
 			return
 		case asn.BlobId:
-			var blob *asn.Blob
-			if blob, err = asn.NewBlobFrom(pdu); err != nil {
-				pdu.Free()
-				pdu = nil
-				return
-			}
-			links, _, err := adm.asn.Repos.File(blob, pdu)
-			if err != nil {
-				asn.Diag.Println(adm.asn.Name, id,
-					"Error:", err)
-			} else {
-				asn.Diag.Println(adm.asn.Name, id, "OK")
-			}
-			for i := range links {
-				// FIXME link these
-				links[i].Free()
-				links[i] = nil
-			}
-			links = nil
-			blob.Free()
-			blob = nil
+			adm.File(pdu)
 			pdu.Free()
 			pdu = nil
 		default:
