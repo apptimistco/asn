@@ -220,6 +220,14 @@ type Server struct {
 	}
 }
 
+func (srv *Server) ForEachSession(f func(*Ses)) {
+	srv.mutex.Lock()
+	defer srv.mutex.Unlock()
+	for _, ses := range srv.sessions {
+		f(ses)
+	}
+}
+
 func (srv *Server) Free(ses *Ses) {
 	srv.mutex.Lock()
 	for i := range srv.sessions {

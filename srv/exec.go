@@ -377,9 +377,10 @@ func (ses *Ses) ExecGC(args ...string) interface{} {
 
 func (ses *Ses) ExecLS(args ...string) interface{} {
 	var out []byte
+	slogin := ses.Keys.Client.Login.String()
 	err := ses.Blobber(func(path string) error {
 		suser, path := ses.srv.repos.ParsePath(path)
-		if suser != "" && suser != ses.Keys.Client.Login.String() {
+		if suser != "" && suser != slogin[:len(suser)] {
 			out = append(out, []byte(suser[:16])...)
 			if path != "" {
 				out = append(out, os.PathSeparator)
@@ -715,12 +716,36 @@ func (ses *Ses) NewBlob(owner, author *asn.ReposUser, name string,
 		blob.Free()
 		blob = nil
 	}()
-	links, sum, err := ses.srv.repos.File(blob, v)
-	for i := range links {
-		// FIXME dist links
-		links[i].Free()
-		links[i] = nil
+	pdus, sum, err := ses.srv.repos.File(blob, v)
+	if err == nil {
+		ses.srv.ForEachSession(func(x *Ses) {
+			if x == ses {
+				return
+			}
+			login := x.Keys.Client.Login
+			slogin := login.String()
+			server := x.srv.Config.Keys.Server.Pub.Encr
+			if login.Equal(server) {
+				if pdus[0] != nil {
+					x.ASN.Tx(pdus[0])
+				}
+				return
+			}
+			for _, pdu := range pdus[1:] {
+				suser, _ := x.srv.repos.ParsePath(pdu.FN)
+				if suser != "" && suser == slogin[:len(suser)] {
+					x.ASN.Tx(pdu)
+					// be sure to send only one per session
+					return
+				}
+			}
+		})
 	}
+	for i := range pdus {
+		pdus[i].Free()
+		pdus[i] = nil
+	}
+	pdus = nil
 	return
 }
 
