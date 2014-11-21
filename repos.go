@@ -313,18 +313,19 @@ func (repos *Repos) Expand(hex string, elements ...string) string {
 // to the assciated owner and subscriber sessions.
 func (repos *Repos) File(blob *Blob, v interface{}) (links []string, sum *Sum,
 	err error) {
+	blobli := len(blob.Name) - 1
 	f, err := repos.Tmp.NewFile()
 	if err != nil {
 		return
 	}
-	if sum, _, err = blob.SummingWriteContentsTo(f, v); err != nil {
-		f.Close()
+	fn := f.Name()
+	sum, _, err = blob.SummingWriteContentsTo(f, v)
+	f.Close()
+	if err != nil {
 		return
 	}
-	tfn := f.Name()
-	f.Close()
 	linkit := func(dst string) {
-		if lerr := ReposLink(tfn, dst); lerr != nil {
+		if lerr := ReposLink(fn, dst); lerr != nil {
 			panic(lerr)
 		}
 		links = append(links, dst)
@@ -333,66 +334,76 @@ func (repos *Repos) File(blob *Blob, v interface{}) (links []string, sum *Sum,
 		if perr := recover(); perr != nil {
 			err = perr.(error)
 		}
-		syscall.Unlink(tfn)
+		syscall.Unlink(fn)
 	}()
 	ssum := sum.String()
-	blobfn := repos.Expand(sum.String())
-	if _, xerr := os.Stat(blobfn); xerr == nil {
+	sumfn := repos.Expand(ssum)
+	blobfn := blob.FN(ssum)
+	if _, xerr := os.Stat(sumfn); xerr == nil {
 		// already exists
 		return
 	}
-	linkit(blobfn)
+	linkit(sumfn)
 	author := repos.Users.Search(&blob.Author)
 	if author == nil {
 		author, err = repos.NewUser(&blob.Author)
 	}
 	owner := repos.Users.Search(&blob.Owner)
 	if owner == nil {
-		author, err = repos.NewUser(&blob.Owner)
+		owner, err = repos.NewUser(&blob.Owner)
 	}
 	switch {
 	case blob.Name == "" || blob.Name == "asn/messages/" ||
 		blob.Name == "asn/messages":
-		if owner.ASN.User != "bridge" {
-			linkit(repos.Expand(author.String, "asn/messages",
-				blob.FN(ssum)))
-			if author == owner {
-				return
-			}
-		}
+		linkit(repos.Expand(author.String, "asn/messages", blobfn))
 		if len(owner.ASN.Moderators) > 0 {
 			for _, k := range owner.ASN.Moderators {
 				linkit(repos.Expand(k.String(), "asn/messages",
-					blob.FN(ssum)))
+					blobfn))
 			}
 		} else {
-			linkit(repos.Expand(owner.String, "asn/messages",
-				blob.FN(ssum)))
+			for _, k := range owner.ASN.Subscribers {
+				if k != *author.Key {
+					linkit(repos.Expand(k.String(),
+						"asn/messages", blobfn))
+				}
+			}
+			if owner != author {
+				linkit(repos.Expand(owner.String,
+					"asn/messages", blobfn))
+			}
 		}
-	case strings.HasSuffix(blob.Name, "/"):
-		linkit(repos.Expand(owner.String, blob.Name[:len(blob.Name)-1],
-			blob.FN(ssum)))
+	case blob.Name == "asn/bridge" || blob.Name == "asn/bridge/":
+		for _, k := range owner.ASN.Subscribers {
+			if k != *author.Key {
+				linkit(repos.Expand(k.String(), "asn/bridge",
+					blobfn))
+			}
+		}
+		// don't mirror or archive bridge messages
+		syscall.Unlink(sumfn)
+		links[0] = ""
+	case blob.Name[blobli] == '/':
+		linkit(repos.Expand(owner.String, blob.Name[:blobli], blobfn))
 	case blob.Name == "asn/mark":
-		dst := repos.Expand(owner.String, "asn/mark")
+		mark := repos.Expand(owner.String, "asn/mark")
 		// always overwrite current mark
-		syscall.Unlink(dst)
-		linkit(dst)
+		syscall.Unlink(mark)
+		linkit(mark)
 		if owner.ASN.User == "actual" {
 			links[0] = ""
 		}
 	case blob.Name == "asn/removals":
-		// FIXME
+		// FIXME rethink removals
 	case blob.Name == "asn/approvals":
 		// FIXME
 	default:
 		dst := repos.Expand(owner.String, blob.Name)
-		if _, err = os.Stat(dst); err == nil {
+		if _, xerr := os.Stat(dst); xerr == nil {
 			if blob.Time.After(BlobTime(dst)) {
-				FlagDeletion(dst)
 				syscall.Unlink(dst)
 				linkit(dst)
 			} else { // don't dist older blob
-				FlagDeletion(blobfn)
 				links = links[:0]
 			}
 		} else {
