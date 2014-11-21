@@ -238,8 +238,12 @@ func (srv *Server) handler(conn net.Conn) {
 	ses := srv.newSes()
 	defer func() {
 		ses.ASN.Println("closed")
+		ses.ASN.Repos = nil
+		ses.ASN.Free()
+		ses.ASN = nil
 		srv.Free(ses)
 	}()
+	ses.ASN.Repos = srv.repos
 	ses.ASN.Name = srv.Config.Name + "[unnamed]"
 	ses.ASN.SetConn(conn)
 	conn.Read(ses.Keys.Client.Ephemeral[:])
@@ -250,19 +254,27 @@ func (srv *Server) handler(conn net.Conn) {
 		srv.Config.Keys.Server.Pub.Encr,
 		srv.Config.Keys.Server.Sec.Encr))
 	for {
-		var err error
-		var v asn.Version
-		var id asn.Id
 		pdu := <-ses.ASN.RxQ
 		if pdu == nil {
 			break
 		}
+		err := pdu.Open()
+		if err != nil {
+			pdu.Free()
+			pdu = nil
+			break
+		}
+		var (
+			v  asn.Version
+			id asn.Id
+		)
 		v.ReadFrom(pdu)
 		if v > ses.ASN.Version() {
 			ses.ASN.SetVersion(v)
 		}
 		id.ReadFrom(pdu)
-		switch id.Internal(v); id {
+		id.Internal(v)
+		switch id {
 		case asn.ExecReqId:
 			err = ses.RxExec(pdu)
 		case asn.LoginReqId:
@@ -283,8 +295,9 @@ func (srv *Server) handler(conn net.Conn) {
 			}
 
 		}
+		pdu.Free()
+		pdu = nil
 		if err != nil {
-			pdu.Free()
 			ses.ASN.Println("Error:", err)
 			break
 		}

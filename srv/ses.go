@@ -86,10 +86,6 @@ func (ses *Ses) Rekey(req asn.Requester) {
 }
 
 func (ses *Ses) RxBlob(pdu *asn.PDU) (err error) {
-	defer func() {
-		pdu.Free()
-		pdu = nil
-	}()
 	blob, err := asn.NewBlobFrom(pdu)
 	if err != nil {
 		return
@@ -107,8 +103,10 @@ func (ses *Ses) RxBlob(pdu *asn.PDU) (err error) {
 }
 
 func (ses *Ses) RxLogin(pdu *asn.PDU) (err error) {
-	var req asn.Requester
-	var sig asn.AuthSig
+	var (
+		req asn.Requester
+		sig asn.AuthSig
+	)
 	req.ReadFrom(pdu)
 	_, err = pdu.Read(ses.Keys.Client.Login[:])
 	if err == nil {
@@ -118,19 +116,20 @@ func (ses *Ses) RxLogin(pdu *asn.PDU) (err error) {
 		return
 	}
 	err = asn.ErrFailure
-	if ses.Keys.Client.Login.Equal(ses.srv.Config.Keys.Admin.Pub.Encr) {
+	switch {
+	case ses.Keys.Client.Login.Equal(ses.srv.Config.Keys.Admin.Pub.Encr):
 		if sig.Verify(ses.srv.Config.Keys.Admin.Pub.Auth,
 			ses.Keys.Client.Login[:]) {
 			ses.ASN.Name = ses.srv.Config.Name + "[Admin]"
 			err = nil
 		}
-	} else if ses.Keys.Client.Login.Equal(ses.srv.Config.Keys.Server.Pub.Encr) {
+	case ses.Keys.Client.Login.Equal(ses.srv.Config.Keys.Server.Pub.Encr):
 		if sig.Verify(ses.srv.Config.Keys.Server.Pub.Auth,
 			ses.Keys.Client.Login[:]) {
 			ses.ASN.Name = ses.srv.Config.Name + "[Server]"
 			err = nil
 		}
-	} else {
+	default:
 		user := ses.srv.repos.Users.Search(ses.Keys.Client.Login.String())
 		if user != nil &&
 			sig.Verify(&user.ASN.Auth, ses.Keys.Client.Login[:]) {
@@ -139,14 +138,13 @@ func (ses *Ses) RxLogin(pdu *asn.PDU) (err error) {
 			err = nil
 		}
 	}
-	if err == nil {
-		ses.ASN.Println("login")
-		ses.Rekey(req)
-		pdu.Free()
-	} else {
+	if err != nil {
 		ses.ASN.Println("login", err)
+	} else {
+		ses.Rekey(req)
+		ses.ASN.Println("login")
 	}
-	return err
+	return
 }
 
 func (ses *Ses) RxPause(pdu *asn.PDU) error {
@@ -155,7 +153,6 @@ func (ses *Ses) RxPause(pdu *asn.PDU) error {
 	ses.ASN.Println("suspending")
 	ses.ASN.Ack(req)
 	ses.ASN.SetStateSuspended()
-	pdu.Free()
 	return nil
 }
 
@@ -165,7 +162,6 @@ func (ses *Ses) RxQuit(pdu *asn.PDU) error {
 	ses.ASN.Println("quitting")
 	ses.ASN.Ack(req)
 	ses.ASN.SetStateQuitting()
-	pdu.Free()
 	return nil
 }
 
@@ -174,7 +170,6 @@ func (ses *Ses) RxResume(pdu *asn.PDU) error {
 	req.ReadFrom(pdu)
 	ses.ASN.Println("resuming")
 	ses.Rekey(req)
-	pdu.Free()
 	return nil
 }
 

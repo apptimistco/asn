@@ -112,15 +112,14 @@ func (ses *Ses) RxExec(pdu *asn.PDU) error {
 	if err != nil {
 		return err
 	}
-	sepi := bytes.Index(cmd[:n], []byte(sep))
+	l, sepi := n, bytes.Index(cmd[:n], []byte(sep))
 	if sepi > 0 {
-		n = sepi
+		l = sepi
 	}
-	args := strings.Split(string(cmd[:n]), "\x00")
+	args := strings.Split(string(cmd[:l]), "\x00")
 	ses.ASN.Println("exec", strings.Join(args, " "))
 	if sepi > 0 {
-		pdu.Rewind()
-		pdu.Read(cmd[:sepi+len(sep)])
+		pdu.Rseek(int64((l-n)+len(sep)), os.SEEK_CUR)
 	}
 	go ses.GoExec(pdu, req, args...)
 	return nil
@@ -170,7 +169,8 @@ func (ses *Ses) Exec(r io.Reader, args ...string) interface{} {
 	case "who":
 		return ses.ExecWho(args[1:]...)
 	default:
-		return asn.ErrUnknown
+		return errors.New("unknown exec command: " + args[0] + "\n" +
+			HelpExec)
 	}
 }
 
@@ -274,7 +274,6 @@ func (ses *Ses) ExecClone(args ...string) interface{} {
 		err   error
 		epoch time.Time
 		arg   string
-		pdu   *asn.PDU
 
 		dir, subdir []os.FileInfo
 	)
@@ -307,11 +306,7 @@ func (ses *Ses) ExecClone(args ...string) interface{} {
 				if !fi.IsDir() && len(fi.Name()) == fnlen {
 					bt := asn.BlobTime(fn)
 					if epoch.IsZero() || bt.After(epoch) {
-						pdu, err = asn.OpenPDU(fn)
-						if err != nil {
-							return err
-						}
-						ses.ASN.Tx(pdu)
+						ses.ASN.Tx(asn.NewPDUFN(fn))
 					}
 				}
 			}
@@ -329,12 +324,9 @@ func (ses *Ses) ExecFetch(args ...string) interface{} {
 	if ses.asnsrv {
 		return ErrCantExec
 	}
-	err = ses.Blobber(func(path string) error {
-		pdu, err := asn.OpenPDU(path)
-		if err == nil {
-			ses.ASN.Tx(pdu)
-		}
-		return err
+	err = ses.Blobber(func(fn string) error {
+		ses.ASN.Tx(asn.NewPDUFN(fn))
+		return nil
 	}, args...)
 	return err
 }
@@ -723,12 +715,12 @@ func (ses *Ses) NewBlob(owner, author *asn.ReposUser, name string,
 		blob.Free()
 		blob = nil
 	}()
-	fns, sum, err := ses.srv.repos.File(blob, v)
-	defer func() { fns = nil }()
-	if err != nil {
-		return
+	links, sum, err := ses.srv.repos.File(blob, v)
+	for i := range links {
+		// FIXME dist links
+		links[i].Free()
+		links[i] = nil
 	}
-	// FIXME dist fns
 	return
 }
 

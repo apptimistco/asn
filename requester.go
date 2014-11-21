@@ -16,8 +16,8 @@ func NewRequesterString(s string) (r Requester) {
 	return
 }
 
-func (p *Requester) ReadFrom(r io.Reader) (n int64, err error) {
-	ni, err := r.Read((*p)[:])
+func (req *Requester) ReadFrom(r io.Reader) (n int64, err error) {
+	ni, err := r.Read(req[:])
 	if err == nil {
 		n = int64(ni)
 	}

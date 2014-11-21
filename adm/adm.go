@@ -22,7 +22,6 @@ package adm
 import (
 	"code.google.com/p/go.net/websocket"
 	"errors"
-	"fmt"
 	"github.com/apptimistco/asn"
 	"io"
 	"net"
@@ -73,10 +72,6 @@ func Main(args ...string) (err error) {
 			return ErrNoSuchServer
 		}
 	}
-	if adm.repos, err = asn.NewRepos(adm.config.Dir); err != nil {
-		return
-	}
-	defer adm.repos.Free()
 	if err = adm.Connect(si); err != nil {
 		return
 	}
@@ -93,10 +88,6 @@ func Main(args ...string) (err error) {
 	adm.Close()
 	if err == io.EOF {
 		err = nil
-	}
-	if err != nil {
-		fmt.Fprintln(Stderr, "PDU trace...")
-		asn.TraceFlush(Stderr)
 	}
 	asn.FlushPDU()
 	return
@@ -134,7 +125,6 @@ func serverIdx(c *asn.Config, s string) int {
 type Adm struct {
 	config    *asn.Config
 	asn       *asn.ASN
-	repos     *asn.Repos
 	ephemeral struct {
 		pub *asn.EncrPub
 		sec *asn.EncrSec
@@ -150,11 +140,15 @@ func (adm *Adm) Blob(name string, v interface{}) (err error) {
 	blob := asn.NewBlob(adm.config.Keys.Admin.Pub.Encr,
 		adm.config.Keys.Admin.Pub.Encr, name)
 	defer blob.Free()
-	pdu := asn.NewPDU()
-	if _, _, err = blob.SummingWriteContentsTo(pdu, v); err == nil {
-		adm.asn.Tx(pdu)
-		asn.Trace(adm.asn.Name, "Tx", asn.BlobId, name)
+	f, err := adm.asn.Repos.Tmp.NewFile()
+	if err != nil {
+		return
 	}
+	if _, _, err = blob.SummingWriteContentsTo(f, v); err == nil {
+		adm.asn.Tx(asn.NewPDUFile(f))
+		asn.Diag.Println(adm.asn.Name, asn.BlobId, name)
+	}
+	f = nil
 	return
 }
 
@@ -182,6 +176,8 @@ func (adm *Adm) Close() {
 				}
 			}
 			adm.asn.Conn().Close()
+			adm.asn.Repos.Free()
+			adm.asn.Repos = nil
 			adm.asn.Free()
 			adm.asn = nil
 			asn.FlushASN()
@@ -224,6 +220,9 @@ func (adm *Adm) Connect(si int) (err error) {
 	adm.ephemeral.pub, adm.ephemeral.sec, _ = asn.NewRandomEncrKeys()
 	conn.Write(adm.ephemeral.pub[:])
 	adm.asn = asn.NewASN()
+	if adm.asn.Repos, err = asn.NewRepos(adm.config.Dir); err != nil {
+		return
+	}
 	adm.asn.Name = adm.config.Name + "[" + adm.config.Server[si].Name + "]"
 	adm.asn.SetBox(asn.NewBox(2,
 		adm.config.Keys.Nonce,
@@ -270,7 +269,18 @@ func (adm *Adm) dial(durl *asn.URL) (net.Conn, error) {
 }
 
 func (adm *Adm) Exec(args ...string) (err error) {
-	pdu := asn.NewPDU()
+	var pdu *asn.PDU
+	if args[len(args)-1] == "-" {
+		f, terr := adm.asn.Repos.Tmp.NewFile()
+		if terr != nil {
+			err = terr
+			return
+		}
+		pdu = asn.NewPDUFile(f)
+		f = nil
+	} else {
+		pdu = asn.NewPDUBuf()
+	}
 	v := adm.asn.Version()
 	v.WriteTo(pdu)
 	asn.ExecReqId.Version(v).WriteTo(pdu)
@@ -281,11 +291,15 @@ func (adm *Adm) Exec(args ...string) (err error) {
 		pdu.ReadFrom(Stdin)
 	}
 	adm.asn.Tx(pdu)
-	asn.Trace(adm.asn.Name, "Tx", asn.ExecReqId, strings.Join(args, " "))
-	pdu, err, _ = adm.UntilAck()
-	if pdu != nil {
-		pdu.WriteTo(Stdout)
-		pdu.Free()
+	asn.Diag.Println(adm.asn.Name, asn.ExecReqId, strings.Join(args, " "))
+	ack, err, _ := adm.UntilAck()
+	if ack != nil {
+		if err == nil {
+			ack.WriteTo(Stdout)
+		} else if ack.Len() > 0 {
+			err = ack.Error()
+		}
+		ack.Free()
 	}
 	return
 }
@@ -299,7 +313,7 @@ func (adm *Adm) IsService(key *asn.EncrPub) bool {
 }
 
 func (adm *Adm) Login() (err error) {
-	pdu := asn.NewPDU()
+	pdu := asn.NewPDUBuf()
 	key := adm.config.Keys.Admin.Pub.Encr
 	sig := adm.config.Keys.Admin.Sec.Auth.Sign(key[:])
 	v := adm.asn.Version()
@@ -309,25 +323,37 @@ func (adm *Adm) Login() (err error) {
 	pdu.Write(key[:])
 	pdu.Write(sig[:])
 	adm.asn.Tx(pdu)
-	asn.Trace(adm.asn.Name, "Tx", asn.LoginReqId, key.String()[:8]+"...",
+	asn.Diag.Println(adm.asn.Name, asn.LoginReqId, key.String()[:8]+"...",
 		sig.String()[:8]+"...")
-	asn.Trace(adm.asn.Name, "Tx", asn.LoginReqId)
-	pdu, err, _ = adm.UntilAck()
-	adm.rekey(pdu)
+	ack, err, _ := adm.UntilAck()
+	if ack != nil {
+		if err == nil {
+			adm.rekey(ack)
+		} else if ack.Len() > 0 {
+			err = ack.Error()
+		}
+		ack.Free()
+	}
 	return
 }
 
 func (adm *Adm) Pause() (err error) {
-	pdu := asn.NewPDU()
+	pdu := asn.NewPDUBuf()
 	v := adm.asn.Version()
 	v.WriteTo(pdu)
 	asn.PauseReqId.Version(v).WriteTo(pdu)
 	asn.NewRequesterString("pause").WriteTo(pdu)
 	adm.asn.Tx(pdu)
-	asn.Trace(adm.asn.Name, "Tx", asn.PauseReqId)
-	pdu, err, _ = adm.UntilAck()
-	pdu.Free()
-	adm.asn.SetStateSuspended()
+	asn.Diag.Println(adm.asn.Name, asn.PauseReqId)
+	ack, err, _ := adm.UntilAck()
+	if ack != nil {
+		if err == nil {
+			adm.asn.SetStateSuspended()
+		} else if ack.Len() > 0 {
+			err = ack.Error()
+		}
+		ack.Free()
+	}
 	return
 }
 
@@ -337,7 +363,6 @@ func (adm *Adm) rekey(pdu *asn.PDU) {
 	if pdu != nil {
 		pdu.Read(peer[:])
 		pdu.Read(nonce[:])
-		pdu.Free()
 		adm.asn.SetBox(asn.NewBox(2, &nonce, &peer,
 			adm.ephemeral.pub, adm.ephemeral.sec))
 		adm.asn.SetStateEstablished()
@@ -345,29 +370,41 @@ func (adm *Adm) rekey(pdu *asn.PDU) {
 }
 
 func (adm *Adm) Resume() (err error) {
-	pdu := asn.NewPDU()
+	pdu := asn.NewPDUBuf()
 	v := adm.asn.Version()
 	v.WriteTo(pdu)
 	asn.ResumeReqId.Version(v).WriteTo(pdu)
 	asn.NewRequesterString("resume").WriteTo(pdu)
 	adm.asn.Tx(pdu)
-	asn.Trace(adm.asn.Name, "Tx", asn.ResumeReqId)
-	pdu, err, _ = adm.UntilAck()
-	adm.rekey(pdu)
+	asn.Diag.Println(adm.asn.Name, asn.ResumeReqId)
+	ack, err, _ := adm.UntilAck()
+	if ack != nil {
+		if err == nil {
+			adm.rekey(pdu)
+		} else if ack.Len() > 0 {
+			err = ack.Error()
+		}
+		ack.Free()
+	}
 	return
 }
 
 func (adm *Adm) Quit() (err error) {
-	pdu := asn.NewPDU()
+	pdu := asn.NewPDUBuf()
 	v := adm.asn.Version()
 	v.WriteTo(pdu)
 	asn.QuitReqId.Version(v).WriteTo(pdu)
 	asn.NewRequesterString("quit").WriteTo(pdu)
 	adm.asn.Tx(pdu)
-	asn.Trace(adm.asn.Name, "Tx", asn.QuitReqId)
+	asn.Diag.Println(adm.asn.Name, asn.QuitReqId)
 	adm.asn.SetStateQuitting()
-	pdu, err, _ = adm.UntilAck()
-	pdu.Free()
+	ack, err, _ := adm.UntilAck()
+	if ack != nil {
+		if err != nil && ack.Len() > 0 {
+			err = ack.Error()
+		}
+		ack.Free()
+	}
 	return err
 }
 
@@ -375,20 +412,24 @@ func (adm *Adm) UntilAck() (pdu *asn.PDU, err error, req asn.Requester) {
 	for {
 		var v asn.Version
 		var id asn.Id
-	selectLoop:
-		for {
+		for pdu == nil {
 			select {
 			case pdu = <-adm.asn.RxQ:
 				if pdu == nil {
 					err = io.EOF
 					return
 				}
-				break selectLoop
 			case sig := <-adm.sigCh:
-				fmt.Println("caught", sig)
+				asn.Diag.Println("caught", sig)
 				adm.asn.SetStateClosed()
+				err = io.EOF
+				return
 			}
 		}
+		if err = pdu.Open(); err != nil {
+			return
+		}
+		asn.Diag.Printf("Rx %p\n", pdu)
 		v.ReadFrom(pdu)
 		if v < adm.asn.Version() {
 			adm.asn.SetVersion(v)
@@ -401,16 +442,7 @@ func (adm *Adm) UntilAck() (pdu *asn.PDU, err error, req asn.Requester) {
 			req.ReadFrom(pdu)
 			e.ReadFrom(pdu)
 			e.Internal(adm.asn.Version())
-			if err = e.Error(); err == nil {
-				asn.Trace(adm.asn.Name, "Rx", id, "OK")
-			} else if err == asn.ErrFailure {
-				var b [128]byte
-				n, _ := pdu.Read(b[:])
-				asn.Trace(adm.asn.Name, "Rx", id, "Error:",
-					string(b[:n]))
-			} else {
-				asn.Trace(adm.asn.Name, "Rx", id, err)
-			}
+			err = e.ErrToError()
 			return
 		case asn.BlobId:
 			var blob *asn.Blob
@@ -419,21 +451,25 @@ func (adm *Adm) UntilAck() (pdu *asn.PDU, err error, req asn.Requester) {
 				pdu = nil
 				return
 			}
-			defer func() {
-				blob.Free()
-				blob = nil
-			}()
-			_, _, err = adm.repos.File(blob, pdu)
+			links, _, err := adm.asn.Repos.File(blob, pdu)
 			if err != nil {
-				asn.Trace(adm.asn.Name, "Rx", id, "Error:",
-					err)
+				asn.Diag.Println(adm.asn.Name, id,
+					"Error:", err)
 			} else {
-				asn.Trace(adm.asn.Name, "Rx", id, "OK")
+				asn.Diag.Println(adm.asn.Name, id, "OK")
 			}
+			for i := range links {
+				// FIXME link these
+				links[i].Free()
+				links[i] = nil
+			}
+			links = nil
+			blob.Free()
+			blob = nil
 			pdu.Free()
 			pdu = nil
 		default:
-			asn.Trace(adm.asn.Name, "Rx", id)
+			asn.Diag.Println(adm.asn.Name, id)
 			pdu.Free()
 			pdu = nil
 			err = asn.ErrUnsupported

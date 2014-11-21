@@ -14,8 +14,12 @@ var Exit = os.Exit
 
 func main() {
 	if err := adm.Main(os.Args...); err != nil {
-		os.Stderr.WriteString(err.Error())
-		os.Stderr.WriteString("\n")
+		nl := []byte{'\n'}
+		s := err.Error()
+		os.Stderr.WriteString(s)
+		if s[len(s)-1] != nl[0] {
+			os.Stderr.Write(nl)
+		}
 		Exit(1)
 	}
 }

@@ -29,6 +29,7 @@ const (
 )
 
 var asnPool chan *ASN
+var ErrTooLarge = errors.New("exceeds MaxSegSz")
 
 func init() { asnPool = make(chan *ASN, 16) }
 
@@ -67,6 +68,8 @@ type ASN struct {
 	// buffers
 	rxBlack, rxRed []byte
 	txBlack, txRed []byte
+	// Repository
+	Repos *Repos
 }
 
 // Flush ASN pool.
@@ -151,22 +154,33 @@ flush: // flush queues
 	asn = nil
 }
 
-// Ack the given requester. If the second argument is *PDU, that is used to
-// form the acknowledgment; otherwise, one is pulled from the pool. If the
-// following argument is an error, the associate code is used in the negative
-// reply with the error string. Otherwise, it's a successful Ack with any
-// subsequent args appended as data.
+// Ack the given requester. If the argument is an error, the associate code is
+// used in the negative reply with the error string. Otherwise, it's a
+// successful Ack with any subsequent args appended as data.
 func (asn *ASN) Ack(req Requester, argv ...interface{}) {
-	var err error
+	var (
+		err error
+		pdu *PDU
+	)
 	if len(argv) == 1 {
 		switch t := argv[0].(type) {
 		case error:
 			err = t
+			argv = argv[1:]
 		case nil:
 			argv = argv[1:]
 		}
 	}
-	pdu := NewPDU()
+	if len(argv) == 0 {
+		pdu = NewPDUBuf()
+	} else {
+		f, err := asn.Repos.Tmp.NewFile()
+		if err != nil {
+			panic("create tmp ack file: " + err.Error())
+		}
+		pdu = NewPDUFile(f)
+		f = nil
+	}
 	v := asn.version
 	v.WriteTo(pdu)
 	AckReqId.Version(v).WriteTo(pdu)
@@ -174,7 +188,11 @@ func (asn *ASN) Ack(req Requester, argv ...interface{}) {
 	if err != nil {
 		Trace(asn.Name, "Tx", AckReqId, req, err)
 		ErrFromError(err).Version(v).WriteTo(pdu)
-		pdu.Write([]byte(err.Error()))
+		if len(argv) > 0 {
+			AckOut(pdu, argv...)
+		} else {
+			pdu.Write([]byte(err.Error()))
+		}
 	} else {
 		Trace(asn.Name, "Tx", AckReqId, req, Success)
 		Success.Version(v).WriteTo(pdu)
@@ -202,7 +220,6 @@ func AckOut(w io.Writer, argv ...interface{}) {
 			w.Write([]byte(t.String()))
 			w.Write([]byte("\n"))
 		}
-		v = nil
 	}
 }
 
@@ -217,50 +234,63 @@ func (asn *ASN) IsClosed() bool      { return asn.state == closed }
 // pdurx receives, decrypts and reassembles segmented PDUs on the asn.RxQ until
 // error, or EOF; then sends nil through asn.RxQ when done.
 func (asn *ASN) pdurx() {
-	var (
-		err error
-		pdu *PDU
-	)
-pduLoop:
-	for {
-		pdu = NewPDU()
-	segLoop:
-		for {
-			var l uint16
-			if _, err = (NBOReader{asn}).ReadNBO(&l); err != nil {
-				break pduLoop
-			}
-			n := l & ^MoreFlag
-			if n > MaxSegSz {
-				err = errors.New("exceeds MaxSegSz")
-				break pduLoop
-			}
-			asn.rxRed = asn.rxRed[:0]
-			if _, err = asn.Read(asn.rxRed[:n]); err != nil {
-				break pduLoop
-			}
-			var b []byte
-			asn.rxBlack = asn.rxBlack[:0]
-			b, err = asn.box.Open(asn.rxBlack[:], asn.rxRed[:n])
-			if err != nil {
-				break pduLoop
-			}
-			if _, err = pdu.Write(b); err != nil {
-				break pduLoop
-			}
-			if (l & MoreFlag) == 0 {
-				asn.RxQ <- pdu
-				pdu = nil
-				break segLoop
-			}
+	pdu := NewPDUBuf()
+	defer func() {
+		var err error
+		if perr := recover(); perr != nil {
+			err = perr.(error)
 		}
-	}
-	pdu.Free()
-	asn.RxQ <- nil
-	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-		Println(asn.Name, "Error:", "Rx", err)
-	} else {
-		Println(asn.Name, "Quit")
+		pdu.Free()
+		asn.RxQ <- nil
+		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+			Diag.Println(asn.Name, err)
+		} else {
+			Diag.Println(asn.Name, "Quit")
+		}
+	}()
+	for {
+		var l uint16
+		_, err := (NBOReader{asn}).ReadNBO(&l)
+		if err != nil {
+			panic(err)
+		}
+		n := l & ^MoreFlag
+		if n > MaxSegSz {
+			panic(ErrTooLarge)
+		}
+		if pdu.File != nil && pdu.PB != nil {
+			Diag.Printf("oops pdu %p\n", pdu)
+		}
+		asn.rxRed = asn.rxRed[:0]
+		_, err = asn.Read(asn.rxRed[:n])
+		if err != nil {
+			panic(err)
+		}
+		asn.rxBlack = asn.rxBlack[:0]
+		b, err := asn.box.Open(asn.rxBlack[:], asn.rxRed[:n])
+		if err != nil {
+			panic(err)
+		}
+		_, err = pdu.Write(b)
+		if err != nil {
+			Diag.Println("pdu.Write:", err)
+			panic(err)
+		}
+		if (l & MoreFlag) == 0 {
+			Diag.Printf("RXQ pdu %p; len %d\n", pdu, pdu.Len())
+			asn.RxQ <- pdu
+			pdu = NewPDUBuf()
+		} else if pdu.PB != nil {
+			pdu.File, err = asn.Repos.Tmp.NewFile()
+			if err != nil {
+				panic(err)
+			}
+			pdu.FN = pdu.File.Name()
+			pdu.File.Write(pdu.PB.Bytes())
+			pdu.PB.Free()
+			pdu.PB = nil
+			Diag.Printf("Extend %p to %s\n", pdu, pdu.FN)
+		}
 	}
 }
 
@@ -275,6 +305,9 @@ func (asn *ASN) pdutx() {
 pduLoop:
 	for {
 		if pb = <-asn.txq; pb.pdu == nil {
+			break pduLoop
+		}
+		if err = pb.pdu.Open(); err != nil {
 			break pduLoop
 		}
 	segLoop:
@@ -306,14 +339,13 @@ pduLoop:
 			if _, err = asn.Write(b); err != nil {
 				break segLoop
 			}
+			Diag.Printf("Tx pdu %p; len %d\n", pb.pdu,
+				l & ^MoreFlag)
 		}
 		pb.pdu.Free()
 		pb.pdu = nil
 		pb.box = nil
 		if err != nil {
-			if err != io.EOF && err != io.ErrUnexpectedEOF {
-				Println("Error:", asn.Name, "Tx", err)
-			}
 			break pduLoop
 		}
 		if asn.IsQuitting() {
@@ -323,6 +355,11 @@ pduLoop:
 				break pduLoop
 			}
 		}
+	}
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		Diag.Println(asn.Name, "Error:", err)
+	} else {
+		Diag.Println(asn.Name, "Quit")
 	}
 }
 
@@ -376,7 +413,18 @@ func (asn *ASN) SetVersion(v Version) {
 }
 
 // Queue PDU for segmentation, encryption and transmission
-func (asn *ASN) Tx(pdu *PDU) { asn.txq <- pdubox{pdu: pdu, box: asn.box} }
+func (asn *ASN) Tx(pdu *PDU) {
+	if pdu.FN != "" {
+		if pdu.File != nil {
+			Diag.Println("Tx", pdu.FN, "size", pdu.Size())
+		} else {
+			Diag.Println("Tx", pdu.FN)
+		}
+	} else {
+		Diag.Printf("Tx %x\n", pdu.PB.Bytes())
+	}
+	asn.txq <- pdubox{pdu: pdu, box: asn.box}
+}
 
 // Version steps down to the peer.
 func (asn *ASN) Version() Version { return asn.version }

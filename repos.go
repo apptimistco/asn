@@ -35,6 +35,19 @@ type ReposTmp struct {
 	mutex *sync.Mutex
 }
 
+func IsReposTmpFN(fn string) bool {
+	pathseparator := string(os.PathSeparator)
+	for _, pat := range []string{
+		"tmp" + pathseparator + "tmp_",
+		"asn" + pathseparator + "bridge" + pathseparator,
+	} {
+		if i := strings.Index(fn, pat); i > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func NewReposTmp(dn string) (tmp *ReposTmp, err error) {
 	tmpDN := filepath.Join(dn, "tmp")
 	x, err := ioutil.ReadDir(tmpDN)
@@ -75,7 +88,7 @@ func (tmp *ReposTmp) Free() {
 func (tmp *ReposTmp) NewFile() (f *os.File, err error) {
 	tmp.mutex.Lock()
 	defer tmp.mutex.Unlock()
-	f, err = os.Create(fmt.Sprintf("%s%cblob%012d", tmp.DN,
+	f, err = os.Create(fmt.Sprintf("%s%ctmp_%012d", tmp.DN,
 		os.PathSeparator, tmp.i))
 	tmp.i += 1
 	return
@@ -311,7 +324,7 @@ func (repos *Repos) Expand(hex string, elements ...string) string {
 // the calling server should distribute to its mirrors. The server should send
 // links named "asn/mark" to all users session. Any other links should be sent
 // to the assciated owner and subscriber sessions.
-func (repos *Repos) File(blob *Blob, v interface{}) (links []string, sum *Sum,
+func (repos *Repos) File(blob *Blob, v interface{}) (links []*PDU, sum *Sum,
 	err error) {
 	blobli := len(blob.Name) - 1
 	f, err := repos.Tmp.NewFile()
@@ -328,7 +341,7 @@ func (repos *Repos) File(blob *Blob, v interface{}) (links []string, sum *Sum,
 		if lerr := ReposLink(fn, dst); lerr != nil {
 			panic(lerr)
 		}
-		links = append(links, dst)
+		links = append(links, NewPDUFN(dst))
 	}
 	defer func() {
 		if perr := recover(); perr != nil {
@@ -382,7 +395,8 @@ func (repos *Repos) File(blob *Blob, v interface{}) (links []string, sum *Sum,
 		}
 		// don't mirror or archive bridge messages
 		syscall.Unlink(sumfn)
-		links[0] = ""
+		links[0].Free()
+		links[0] = nil
 	case blob.Name[blobli] == '/':
 		linkit(repos.Expand(owner.String, blob.Name[:blobli], blobfn))
 	case blob.Name == "asn/mark":
@@ -391,7 +405,8 @@ func (repos *Repos) File(blob *Blob, v interface{}) (links []string, sum *Sum,
 		syscall.Unlink(mark)
 		linkit(mark)
 		if owner.ASN.User == "actual" {
-			links[0] = ""
+			links[0].Free()
+			links[0] = nil
 		}
 	case blob.Name == "asn/removals":
 		// FIXME rethink removals

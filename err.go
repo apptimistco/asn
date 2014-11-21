@@ -133,7 +133,8 @@ func (p *Err) Internal(v Version) {
 		*p = VerErr[i]
 	}
 }
-func (e Err) Error() error {
+
+func (e Err) ErrToError() error {
 	i := int(e)
 	if i >= int(Nerrors) {
 		return ErrUnknown
@@ -151,9 +152,10 @@ func (p *Err) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-// String returns the name of internal Err.
+// Error and String return the name of internal Err.
+func (e Err) Error() string { return e.String() }
 func (e Err) String() string {
-	err := e.Error()
+	err := e.ErrToError()
 	if err == nil {
 		return "Success"
 	}

@@ -9,8 +9,6 @@ Fetch, build and install `asn` or the versioned package with GO tool.
 (See the [MacOS](#macos) section for running `asn` on that instead of Linux)
 
 This will install these external dependencies.
-    github.com/apptimistco/yab
-    github.com/apptimistco/datum
     code.google.com/p/go.net/websocket
     gopkg.in/yaml.v1
 
@@ -53,7 +51,7 @@ https://godoc.org/github.com/apptimistco/asn)
 To run `asn` under MacOS, start by installing Go tools.
 
 - Download latest installer: https://golang.org/dl/
-- Open and install go1.*.darwin-amd64-osx10.8.pkg
+- Open and install `go1.*.darwin-amd64-osx10.8.pkg`
 - Setenv
 
     export GOROOT=/usr/local/go
