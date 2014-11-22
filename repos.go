@@ -324,7 +324,7 @@ func (repos *Repos) Expand(hex string, elements ...string) string {
 // the calling server should distribute to its mirrors. The server should send
 // links named "asn/mark" to all users session. Any other links should be sent
 // to the assciated owner and subscriber sessions.
-func (repos *Repos) File(blob *Blob, v interface{}) (links []*PDU, sum *Sum,
+func (repos *Repos) File(blob *Blob, v interface{}) (out []*PDU, sum *Sum,
 	err error) {
 	blobli := len(blob.Name) - 1
 	f, err := repos.Tmp.NewFile()
@@ -336,12 +336,6 @@ func (repos *Repos) File(blob *Blob, v interface{}) (links []*PDU, sum *Sum,
 	f.Close()
 	if err != nil {
 		return
-	}
-	linkit := func(dst string) {
-		if lerr := ReposLink(fn, dst); lerr != nil {
-			panic(lerr)
-		}
-		links = append(links, NewPDUFN(dst))
 	}
 	defer func() {
 		if perr := recover(); perr != nil {
@@ -356,76 +350,133 @@ func (repos *Repos) File(blob *Blob, v interface{}) (links []*PDU, sum *Sum,
 		// already exists
 		return
 	}
-	linkit(sumfn)
+	out = ReposLN(out, fn, sumfn)
 	author := repos.Users.Search(&blob.Author)
 	if author == nil {
-		author, err = repos.NewUser(&blob.Author)
+		if author, err = repos.NewUser(&blob.Author); err != nil {
+			return
+		}
 	}
 	owner := repos.Users.Search(&blob.Owner)
 	if owner == nil {
-		owner, err = repos.NewUser(&blob.Owner)
+		if owner, err = repos.NewUser(&blob.Owner); err != nil {
+			return
+		}
 	}
 	switch {
 	case blob.Name == "" || blob.Name == "asn/messages/" ||
 		blob.Name == "asn/messages":
-		linkit(repos.Expand(author.String, "asn/messages", blobfn))
+		out = ReposLN(out, sumfn, repos.Expand(author.String,
+			"asn/messages", blobfn))
 		if len(owner.ASN.Moderators) > 0 {
 			for _, k := range owner.ASN.Moderators {
-				linkit(repos.Expand(k.String(), "asn/messages",
-					blobfn))
+				out = ReposLN(out, sumfn,
+					repos.Expand(k.String(),
+						"asn/messages", blobfn))
 			}
 		} else {
 			for _, k := range owner.ASN.Subscribers {
 				if k != *author.Key {
-					linkit(repos.Expand(k.String(),
-						"asn/messages", blobfn))
+					out = ReposLN(out, sumfn,
+						repos.Expand(k.String(),
+							"asn/messages", blobfn))
 				}
 			}
 			if owner != author {
-				linkit(repos.Expand(owner.String,
-					"asn/messages", blobfn))
+				out = ReposLN(out, sumfn,
+					repos.Expand(owner.String,
+						"asn/messages", blobfn))
 			}
 		}
 	case blob.Name == "asn/bridge" || blob.Name == "asn/bridge/":
 		for _, k := range owner.ASN.Subscribers {
 			if k != *author.Key {
-				linkit(repos.Expand(k.String(), "asn/bridge",
-					blobfn))
+				out = ReposLN(out, sumfn,
+					repos.Expand(k.String(),
+						"asn/bridge", blobfn))
 			}
 		}
 		// don't mirror or archive bridge messages
 		syscall.Unlink(sumfn)
-		links[0].Free()
-		links[0] = nil
+		out[0].Free()
+		out[0] = nil
 	case blob.Name[blobli] == '/':
-		linkit(repos.Expand(owner.String, blob.Name[:blobli], blobfn))
+		out = ReposLN(out, sumfn,
+			repos.Expand(owner.String, blob.Name[:blobli], blobfn))
 	case blob.Name == "asn/mark":
 		mark := repos.Expand(owner.String, "asn/mark")
 		// always overwrite current mark
 		syscall.Unlink(mark)
-		linkit(mark)
+		out = ReposLN(out, sumfn, mark)
 		if owner.ASN.User == "actual" {
-			links[0].Free()
-			links[0] = nil
+			out[0].Free()
+			out[0] = nil
 		}
 	case blob.Name == "asn/removals":
 		// FIXME rethink removals
 	case blob.Name == "asn/approvals":
-		// FIXME
+		out = repos.forward(out, blob, fn)
 	default:
 		dst := repos.Expand(owner.String, blob.Name)
 		if _, xerr := os.Stat(dst); xerr == nil {
 			if blob.Time.After(BlobTime(dst)) {
 				syscall.Unlink(dst)
-				linkit(dst)
+				out = ReposLN(out, sumfn, dst)
 			} else { // don't dist older blob
-				links = links[:0]
+				out = out[:0]
 			}
 		} else {
-			linkit(dst)
+			out = ReposLN(out, sumfn, dst)
 		}
 	}
 	return
+}
+
+// forward the moderator approved messages
+func (repos *Repos) forward(in []*PDU, blob *Blob, fn string) []*PDU {
+	out := in
+	sums := readBlobSumList(fn)
+	defer func() { sums = nil }()
+	for _, sum := range sums {
+		ssum := sum.String()
+		xfn := repos.Expand(ssum)
+		xf, err := os.Open(xfn)
+		if err != nil {
+			panic(err)
+		}
+		xblob, err := NewBlobFrom(xf)
+		if err != nil {
+			panic(err)
+		}
+		xowner := repos.Users.Search(&xblob.Owner)
+		xblobfn := xblob.FN(ssum)
+		subscribers := xowner.ASN.Subscribers
+		if xblob.Name == "" || xblob.Name == "asn/messages/" ||
+			xblob.Name == "asn/messages" {
+			for _, moderator := range xowner.ASN.Moderators {
+				if moderator == blob.Author {
+					for _, sub := range subscribers {
+						if sub != blob.Author {
+							s := sub.String()
+							dst := repos.Expand(s,
+								"asn/messages",
+								xblobfn)
+							out = ReposLN(out, xfn,
+								dst)
+						}
+					}
+					if xblob.Owner != blob.Author {
+						s := xblob.Owner.String()
+						dst := repos.Expand(s,
+							"asn/messages",
+							xblobfn)
+						out = ReposLN(out, xfn, dst)
+					}
+				}
+			}
+		}
+	}
+	return out
 }
 
 // Free repos cache
@@ -560,19 +611,22 @@ func (repos *Repos) Search(x string) (match string, err error) {
 	}
 }
 
-// ReposLink creates directories if required then hard links dst with src
-func ReposLink(src, dst string) (err error) {
+// ReposLN creates directories if required then hard links dst with src.
+// This panic's on error so the calling function must recover.
+func ReposLN(ilinks []*PDU, src, dst string) []*PDU {
 	dn := filepath.Dir(dst)
-	if _, err = os.Stat(dn); err != nil {
+	if _, err := os.Stat(dn); err != nil {
 		if !os.IsNotExist(err) {
-			return
+			panic(err)
 		}
-		if err = os.MkdirAll(dn, ReposPerm); err != nil {
-			return
+		if err := os.MkdirAll(dn, ReposPerm); err != nil {
+			panic(err)
 		}
 	}
-	err = syscall.Link(src, dst)
-	return
+	if err := syscall.Link(src, dst); err != nil {
+		panic(err)
+	}
+	return append(ilinks, NewPDUFN(dst))
 }
 
 func IsHex(s string) bool {

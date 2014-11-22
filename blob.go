@@ -88,6 +88,30 @@ func ReadBlobKeyList(fn string) (keys []EncrPub, err error) {
 	return
 }
 
+// ReadBlobSumList from named file.
+// This panic's on error so the calling function must recover.
+func readBlobSumList(fn string) []Sum {
+	f, err := os.Open(fn)
+	if err != nil {
+		panic(err)
+	}
+	defer f.Close()
+	pos, err := SeekBlobContent(f)
+	if err != nil {
+		panic(err)
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		panic(err)
+	}
+	n := int(fi.Size()-pos) / SumSz
+	sums := make([]Sum, n)
+	for i := 0; i < n; i++ {
+		f.Read(sums[i][:])
+	}
+	return sums
+}
+
 // SeekBlobContent moves the ReadSeeker past the ASN blob headers
 func SeekBlobContent(r io.ReadSeeker) (n int64, err error) {
 	var b [1]byte
