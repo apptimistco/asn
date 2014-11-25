@@ -52,6 +52,38 @@ func SesPoolFlush() {
 
 func (ses *Ses) DN() string { return ses.srv.Config.Dir }
 
+// dist pdu list to online sessions. Any sessions to other servers receive the
+// first link which is the RESPO/SHA. All user sessions receive "asn/mark". Any
+// other named blob named REPOS/USER/PATH goes to the associated USER sessions.
+func (ses *Ses) dist(pdus []*asn.PDU) {
+	ses.srv.ForEachSession(func(x *Ses) {
+		if x == ses {
+			return
+		}
+		login := x.Keys.Client.Login
+		slogin := login.String()
+		server := x.srv.Config.Keys.Server.Pub.Encr
+		if login.Equal(server) {
+			if pdus[0] != nil {
+				x.ASN.Tx(pdus[0])
+			}
+			return
+		}
+		for _, pdu := range pdus[1:] {
+			suser, _ := x.srv.repos.ParsePath(pdu.FN)
+			if suser != "" && suser == slogin[:len(suser)] {
+				x.ASN.Tx(pdu)
+				// be sure to send only one per session
+				return
+			}
+		}
+	})
+	for i := range pdus {
+		pdus[i].Free()
+		pdus[i] = nil
+	}
+}
+
 // Free the Ses by pooling or release it to GC if pool is full.
 func (ses *Ses) Free() {
 	if ses != nil {
@@ -94,11 +126,16 @@ func (ses *Ses) RxBlob(pdu *asn.PDU) (err error) {
 		blob.Free()
 		blob = nil
 	}()
-	fns, sum, err := ses.srv.repos.File(blob, pdu)
-	defer func() { fns = nil }()
-	// FIXME dist fns
-	_ = fns
-	_ = sum
+	sum, fn, err := ses.srv.repos.File(blob, pdu)
+	if err != nil {
+		return
+	}
+	links, err := ses.srv.repos.MkLinks(blob, sum, fn)
+	if err != nil {
+		return
+	}
+	ses.dist(links)
+	links = nil
 	return
 }
 

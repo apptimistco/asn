@@ -133,7 +133,7 @@ func (pdu *PDU) Free() {
 		pdu.File = nil
 	}
 	if pdu.FN != "" {
-		if IsReposTmpFN(pdu.FN) {
+		if reposIsTmpFN(pdu.FN) {
 			os.Remove(pdu.FN)
 		}
 		pdu.FN = ""

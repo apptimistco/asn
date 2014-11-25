@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"io"
+	"os"
 )
 
 const (
@@ -17,26 +18,85 @@ const (
 	EncrSecSz = 32
 )
 
+type EncrPubList []EncrPub
+
+func (keys EncrPubList) Has(x *EncrPub) bool {
+	for _, k := range keys {
+		if k == *x {
+			return true
+		}
+	}
+	return false
+}
+
+// EncrPubList.fromBlob panics on error so the calling function must recover.
+func (lp *EncrPubList) fromBlob(fn string) {
+	f, err := os.Open(fn)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return
+		}
+		panic(err)
+	}
+	defer f.Close()
+	pos := blobSeek(f)
+	fi, err := f.Stat()
+	if err != nil {
+		panic(err)
+	}
+	n := int(fi.Size()-pos) / EncrPubSz
+	keys := make([]EncrPub, n)
+	for i := 0; i < n; i++ {
+		f.Read(keys[i][:])
+	}
+	*lp = keys
+}
+
 // EncrPub[lic] key
 type EncrPub [EncrPubSz]byte
 
 // Decode the given hexadecimal character string into a new
 // public encryption key.
 func NewEncrPubString(s string) (*EncrPub, error) {
-	b, err := DecodeStringExactly(s, EncrPubSz)
-	if err != nil {
-		return nil, err
-	}
-	pub := &EncrPub{}
-	copy(pub[:], b[:])
-	return pub, nil
+	return NewEncrPub(s)
 }
 
 // NewEncrPubReader reads a binary key from given reader.
 func NewEncrPubReader(r io.Reader) (*EncrPub, error) {
+	return NewEncrPub(r)
+}
+
+// NewEncrPub creates a binary key from given reader or string.
+func NewEncrPub(v interface{}) (pub *EncrPub, err error) {
+	defer func() {
+		if perr := recover(); perr != nil {
+			err = perr.(error)
+		}
+	}()
+	pub = newEncrPub(v)
+	return
+}
+
+// newEncrPub will panic on error so the calling function must recover.
+func newEncrPub(v interface{}) *EncrPub {
 	pub := &EncrPub{}
-	_, err := r.Read(pub[:])
-	return pub, err
+	switch t := v.(type) {
+	case string:
+		if b, err := DecodeStringExactly(t, EncrPubSz); err != nil {
+			panic(err)
+		} else {
+			copy(pub[:], b[:])
+			b = nil
+		}
+		return pub
+	case io.Reader:
+		if _, err := t.Read(pub[:]); err != nil {
+			panic(err)
+		}
+		return pub
+	default:
+		panic(os.ErrInvalid)
+	}
 }
 
 // New, random public and secret encryption keys.
@@ -54,6 +114,24 @@ func (pub *EncrPub) Bytes() (b []byte) {
 // Equal returns a boolean reporting whether another key is equivalent.
 func (pub *EncrPub) Equal(other *EncrPub) bool {
 	return bytes.Equal(pub[:], other[:])
+}
+
+// fromBlob will panic on error so the calling function must recover.
+func (pub *EncrPub) fromBlob(fn string) int {
+	f, err := os.Open(fn)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0
+		}
+		panic(err)
+	}
+	defer f.Close()
+	blobSeek(f)
+	n, err := f.Read(pub[:])
+	if err != nil {
+		panic(err)
+	}
+	return n
 }
 
 func (pub *EncrPub) GetYAML() (string, interface{}) {
@@ -88,7 +166,7 @@ type EncrSec [EncrSecSz]byte
 
 // Decode the given hexadecimal character string into a new secret key.
 func NewEncrSecString(s string) (*EncrSec, error) {
-	b, err := DecodeStringExactly(s, EncrPubSz)
+	b, err := DecodeStringExactly(s, EncrSecSz)
 	if err != nil {
 		return nil, err
 	}

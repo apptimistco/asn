@@ -19,12 +19,18 @@ import (
 )
 
 const (
-	ReposPerm  = os.FileMode(0770)
-	reposTopSz = 2
+	ReposPerm      = os.FileMode(0770)
+	reposPS        = string(os.PathSeparator)
+	reposTopSz     = 2
+	reposAsnDN     = "asn"
+	reposBridgeDN  = "bridge"
+	reposTmpDN     = "tmp"
+	reposTmpPre    = "tmp_"
+	reposTmpPat    = reposTmpDN + reposPS + reposTmpPre
+	reposBridgePat = reposAsnDN + reposPS + reposBridgeDN + reposPS
 )
 
 var (
-	Join        = filepath.Join
 	ErrAmbiguos = errors.New("Ambiguous USER or SHA")
 	ErrNOENT    = errors.New("No such USER, SHA or FILE")
 )
@@ -35,42 +41,7 @@ type ReposTmp struct {
 	mutex *sync.Mutex
 }
 
-func IsReposTmpFN(fn string) bool {
-	pathseparator := string(os.PathSeparator)
-	for _, pat := range []string{
-		"tmp" + pathseparator + "tmp_",
-		"asn" + pathseparator + "bridge" + pathseparator,
-	} {
-		if i := strings.Index(fn, pat); i > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func NewReposTmp(dn string) (tmp *ReposTmp, err error) {
-	tmpDN := filepath.Join(dn, "tmp")
-	x, err := ioutil.ReadDir(tmpDN)
-	if err == nil {
-		// flush hanging tmp files
-		for _, fi := range x {
-			syscall.Unlink(fi.Name())
-		}
-		x = nil
-	} else if os.IsNotExist(err) {
-		if err = os.MkdirAll(tmpDN, ReposPerm); err != nil {
-			return
-		}
-	}
-	tmp = &ReposTmp{
-		DN:    tmpDN,
-		i:     0,
-		mutex: new(sync.Mutex),
-	}
-	return
-}
-
-func (tmp *ReposTmp) Free() {
+func (tmp *ReposTmp) free() {
 	if tmp == nil {
 		return
 	}
@@ -100,81 +71,23 @@ type ReposUser struct {
 	ASN    struct {
 		Auth        AuthPub
 		Author      EncrPub
-		Editors     []EncrPub
-		Moderators  []EncrPub
-		Subscribers []EncrPub
+		Editors     EncrPubList
+		Moderators  EncrPubList
+		Subscribers EncrPubList
 		User        string
 	}
 }
 
-func NewReposUser(reposDN, suser string) (user *ReposUser, err error) {
-	key, err := NewEncrPubString(suser)
-	if err != nil {
-		return
-	}
-	user = &ReposUser{
-		Key:    key,
-		String: suser,
-	}
-	defer func() {
-		if err != nil {
-			user.Key = nil
-			user.ASN.Editors = nil
-			user.ASN.Moderators = nil
-			user.ASN.Subscribers = nil
-			user = nil
-		}
-	}()
-	_, err = ReadBlobContent(user.ASN.Auth[:],
-		filepath.Join(reposDN, user.Expand("asn/auth")))
-	if err != nil && !os.IsNotExist(err) {
-		return
-	}
-	_, err = ReadBlobContent(user.ASN.Author[:],
-		filepath.Join(reposDN, user.Expand("asn/author")))
-	if err != nil && !os.IsNotExist(err) {
-		return
-	}
-	user.ASN.Editors, err = ReadBlobKeyList(filepath.Join(reposDN,
-		user.Expand("asn/editors")))
-	if err != nil && !os.IsNotExist(err) {
-		return
-	}
-	user.ASN.Moderators, err = ReadBlobKeyList(filepath.Join(reposDN,
-		user.Expand("asn/moderators")))
-	if err != nil && !os.IsNotExist(err) {
-		return
-	}
-	user.ASN.Subscribers, err = ReadBlobKeyList(filepath.Join(reposDN,
-		user.Expand("asn/subscribers")))
-	if err != nil && !os.IsNotExist(err) {
-		return
-	}
-	var b [256]byte
-	n, err := ReadBlobContent(b[:],
-		filepath.Join(reposDN, user.Expand("asn/user")))
-	if err != nil {
-		if os.IsNotExist(err) {
-			user.ASN.User = "actual"
-			err = nil
-		}
-	} else {
-		user.ASN.User = string(b[:n])
-	}
-	return
-}
-
-// Expand converts the stringified user key to repos file name.
-func (user *ReposUser) Expand(elements ...string) string {
-	path := filepath.Join(ReposTopDN(user.String),
-		ReposSubDFN(user.String))
+// expand converts the stringified user key to repos file name.
+func (user *ReposUser) expand(elements ...string) string {
+	path := filepath.Join(user.TopDN(), user.SubDN())
 	for _, x := range elements {
 		path = filepath.Join(path, filepath.FromSlash(x))
 	}
 	return path
 }
 
-func (user *ReposUser) Free() {
+func (user *ReposUser) free() {
 	if user != nil {
 		return
 	}
@@ -184,55 +97,24 @@ func (user *ReposUser) Free() {
 	user.ASN.Subscribers = nil
 }
 
+func (user *ReposUser) SubDN() string { return user.String[reposTopSz:] }
+func (user *ReposUser) TopDN() string { return user.String[:reposTopSz] }
+
 type ReposUsers struct {
 	Entry []*ReposUser
 	mutex *sync.Mutex
 }
 
-func NewReposUsers(dn string) (users *ReposUsers, err error) {
-	users = &ReposUsers{mutex: new(sync.Mutex)}
-	var topdir, subdir []os.FileInfo
-	var user *ReposUser
-	defer func() {
-		if err != nil {
-			users.Free()
-			users = nil
-		}
-		topdir = nil
-		subdir = nil
-		user = nil
-	}()
-	if topdir, err = ioutil.ReadDir(dn); err != nil {
-		return
-	}
-	for _, fi := range topdir {
-		if fi.IsDir() && len(fi.Name()) == reposTopSz {
-			subdn := filepath.Join(dn, fi.Name())
-			if subdir, err = ioutil.ReadDir(subdn); err != nil {
-				return
-			}
-			for _, subfi := range subdir {
-				if subfi.IsDir() && IsUserENT(subfi.Name()) {
-					user, err = NewReposUser(dn,
-						fi.Name()+subfi.Name())
-					if err != nil {
-						return
-					}
-					users.Entry = append(users.Entry, user)
-				}
-			}
-		}
-	}
-	return
+func (users *ReposUsers) add(user *ReposUser) {
+	users.Entry = append(users.Entry, user)
 }
 
-// Free repos user table to GC
-func (users *ReposUsers) Free() {
+func (users *ReposUsers) free() {
 	if users == nil {
 		return
 	}
 	for i, e := range users.Entry {
-		e.Free()
+		e.free()
 		users.Entry[i] = nil
 	}
 	users.Entry = nil
@@ -287,20 +169,18 @@ type Repos struct {
 }
 
 func NewRepos(dn string) (repos *Repos, err error) {
-	tmp, err := NewReposTmp(dn)
-	if err != nil {
-		return
-	}
-	users, err := NewReposUsers(dn)
-	if err != nil {
-		tmp.Free()
-		return
-	}
+	defer func() {
+		if perr := recover(); perr != nil {
+			err = perr.(error)
+			repos.Free()
+			repos = nil
+		}
+	}()
 	repos = &Repos{
-		DN:    dn,
-		Tmp:   tmp,
-		Users: users,
+		DN: dn,
 	}
+	repos.newTmp()
+	repos.newUsers()
 	return
 }
 
@@ -309,196 +189,316 @@ func (repos *Repos) DePrefix(pn string) string {
 	return pn[len(repos.DN)+1:]
 }
 
-// Expand converts the stringified user key or blob sum to respective repos
+// expand converts the stringified user key or blob sum to respective repos
 // directory and file name.
 func (repos *Repos) Expand(hex string, elements ...string) string {
-	path := filepath.Join(repos.DN, ReposTopDN(hex), ReposSubDFN(hex))
+	path := repos.join(reposTopDN(hex), reposSubDFN(hex))
 	for _, x := range elements {
 		path = filepath.Join(path, filepath.FromSlash(x))
 	}
 	return path
 }
 
-// File blob with v contents in repos returning list of file links, sum and any
-// error.  The first link name (unless it's a user mark) is the blob sum that
-// the calling server should distribute to its mirrors. The server should send
-// links named "asn/mark" to all users session. Any other links should be sent
-// to the assciated owner and subscriber sessions.
-func (repos *Repos) File(blob *Blob, v interface{}) (out []*PDU, sum *Sum,
+func (repos *Repos) load(user *ReposUser) {
+	user.Key = newEncrPub(user.String)
+	user.ASN.Auth.fromBlob(repos.join(user.expand("asn/auth")))
+	user.ASN.Author.fromBlob(repos.join(user.expand("asn/author")))
+	user.ASN.Editors.fromBlob(repos.join(user.expand("asn/editors")))
+	user.ASN.Moderators.fromBlob(repos.join(user.expand("asn/moderators")))
+	user.ASN.Subscribers.fromBlob(repos.join(user.expand("asn/subscribers")))
+	user.ASN.User = blobGets(repos.join(user.expand("asn/user")))
+	if user.ASN.User == "" {
+		user.ASN.User = "actual"
+	}
+}
+
+// File blob with v contents in repos returning file sum, name, and any error.
+// Returns empty name if file already exists.
+func (repos *Repos) File(blob *Blob, v interface{}) (sum *Sum, fn string,
 	err error) {
-	blobli := len(blob.Name) - 1
-	f, err := repos.Tmp.NewFile()
+	tf, err := repos.Tmp.NewFile()
 	if err != nil {
 		return
 	}
-	fn := f.Name()
-	sum, _, err = blob.SummingWriteContentsTo(f, v)
-	f.Close()
-	if err != nil {
-		return
-	}
+	tfn := tf.Name()
 	defer func() {
 		if perr := recover(); perr != nil {
 			err = perr.(error)
 		}
-		syscall.Unlink(fn)
+		syscall.Unlink(tfn)
 	}()
-	ssum := sum.String()
-	sumfn := repos.Expand(ssum)
-	blobfn := blob.FN(ssum)
-	if _, xerr := os.Stat(sumfn); xerr == nil {
-		// already exists
+	sum, _, err = blob.SummingWriteContentsTo(tf, v)
+	tf.Close()
+	if err != nil {
 		return
 	}
-	out = ReposLN(out, fn, sumfn)
-	author := repos.Users.Search(&blob.Author)
-	if author == nil {
-		if author, err = repos.NewUser(&blob.Author); err != nil {
-			return
-		}
+	fn = repos.Expand(sum.String())
+	if _, xerr := os.Stat(fn); xerr == nil {
+		// already exists
+		fn = ""
+		return
 	}
-	owner := repos.Users.Search(&blob.Owner)
-	if owner == nil {
-		if owner, err = repos.NewUser(&blob.Owner); err != nil {
-			return
+	reposLN(tfn, fn)
+	return
+}
+
+// MkLinks to given REPOS/SHA file.  The first link name (unless it's a user
+// mark) is the blob sum that the calling server should distribute to its
+// mirrors. The server should send links named "asn/mark" to all users session.
+// Any other links should be sent to the associated owner and subscriber
+// sessions.
+func (repos *Repos) MkLinks(blob *Blob, sum *Sum, fn string) (links []*PDU,
+	err error) {
+	defer func() {
+		if perr := recover(); perr != nil {
+			err = perr.(error)
 		}
-	}
+	}()
+	blobli := len(blob.Name) - 1
 	switch {
 	case blob.Name == "" || blob.Name == "asn/messages/" ||
 		blob.Name == "asn/messages":
-		out = ReposLN(out, sumfn, repos.Expand(author.String,
-			"asn/messages", blobfn))
-		if len(owner.ASN.Moderators) > 0 {
-			for _, k := range owner.ASN.Moderators {
-				out = ReposLN(out, sumfn,
-					repos.Expand(k.String(),
-						"asn/messages", blobfn))
-			}
-		} else {
-			for _, k := range owner.ASN.Subscribers {
-				if k != *author.Key {
-					out = ReposLN(out, sumfn,
-						repos.Expand(k.String(),
-							"asn/messages", blobfn))
-				}
-			}
-			if owner != author {
-				out = ReposLN(out, sumfn,
-					repos.Expand(owner.String,
-						"asn/messages", blobfn))
-			}
-		}
+		links = repos.mkMessageLinks(blob, sum, fn)
 	case blob.Name == "asn/bridge" || blob.Name == "asn/bridge/":
-		for _, k := range owner.ASN.Subscribers {
-			if k != *author.Key {
-				out = ReposLN(out, sumfn,
-					repos.Expand(k.String(),
-						"asn/bridge", blobfn))
-			}
-		}
-		// don't mirror or archive bridge messages
-		syscall.Unlink(sumfn)
-		out[0].Free()
-		out[0] = nil
-	case blob.Name[blobli] == '/':
-		out = ReposLN(out, sumfn,
-			repos.Expand(owner.String, blob.Name[:blobli], blobfn))
+		links = repos.mkBridgeLinks(blob, sum, fn)
 	case blob.Name == "asn/mark":
-		mark := repos.Expand(owner.String, "asn/mark")
-		// always overwrite current mark
-		syscall.Unlink(mark)
-		out = ReposLN(out, sumfn, mark)
-		if owner.ASN.User == "actual" {
-			out[0].Free()
-			out[0] = nil
-		}
+		links = repos.mkMarkLinks(blob, sum, fn)
 	case blob.Name == "asn/removals":
-		// FIXME rethink removals
+		links = repos.mkRemovalLinks(blob, sum, fn)
 	case blob.Name == "asn/approvals":
-		out = repos.forward(out, blob, fn)
+		links = repos.mkForwardLinks(blob, sum, fn)
+	case blob.Name[blobli] == '/':
+		links = repos.mkDerivedLinks(blob, sum, fn, blob.Name[:blobli])
 	default:
-		dst := repos.Expand(owner.String, blob.Name)
-		if _, xerr := os.Stat(dst); xerr == nil {
-			if blob.Time.After(BlobTime(dst)) {
-				syscall.Unlink(dst)
-				out = ReposLN(out, sumfn, dst)
-			} else { // don't dist older blob
-				out = out[:0]
-			}
-		} else {
-			out = ReposLN(out, sumfn, dst)
-		}
+		links = repos.mkNamedLinks(blob, sum, fn)
 	}
 	return
 }
 
+// mkBridgeLinks to all subscriber's "asn/bridge/EPOCH_SHA".
+// Don't mirror or archive bridge messages by removing REPOS/SHA.
+func (repos *Repos) mkBridgeLinks(blob *Blob, sum *Sum, sumFN string) []*PDU {
+	owner := repos.searchOrNewUser(&blob.Owner)
+	blobFN := blob.FN(sum.String())
+	n := len(owner.ASN.Subscribers)
+	if n == 0 {
+		return nil
+	}
+	links := make([]*PDU, n+1)
+	for i, k := range owner.ASN.Subscribers {
+		user := repos.searchOrNewUser(k)
+		fn := repos.join(user.expand("asn/bridge", blobFN))
+		reposLN(sumFN, fn)
+		links[i+1] = NewPDUFN(fn)
+	}
+	syscall.Unlink(sumFN)
+	return links
+}
+
+func (repos *Repos) mkDerivedLinks(blob *Blob, sum *Sum,
+	sumFN, dn string) []*PDU {
+	owner := repos.searchOrNewUser(&blob.Owner)
+	fn := repos.join(owner.expand(dn, blob.FN(sum.String())))
+	reposLN(sumFN, fn)
+	return []*PDU{
+		0: NewPDUFN(sumFN),
+		1: NewPDUFN(fn),
+	}
+}
+
+func (repos *Repos) mkNamedLinks(blob *Blob, sum *Sum, sumFN string) []*PDU {
+	owner := repos.searchOrNewUser(&blob.Owner)
+	fn := repos.join(owner.expand(blob.Name))
+	if _, xerr := os.Stat(fn); xerr == nil {
+		if blob.Time.After(BlobTime(fn)) {
+			syscall.Unlink(fn)
+			reposLN(sumFN, fn)
+			return []*PDU{
+				0: NewPDUFN(sumFN),
+				1: NewPDUFN(fn),
+			}
+		} else { // don't dist or link older blob
+			return nil
+		}
+	}
+	reposLN(sumFN, fn)
+	return []*PDU{
+		0: NewPDUFN(sumFN),
+		1: NewPDUFN(fn),
+	}
+}
+
 // forward the moderator approved messages
-func (repos *Repos) forward(in []*PDU, blob *Blob, fn string) []*PDU {
-	out := in
-	sums := readBlobSumList(fn)
+func (repos *Repos) mkForwardLinks(blob *Blob, sum *Sum, sumFN string) []*PDU {
+	var sums Sums
+	sums.fromBlob(sumFN)
 	defer func() { sums = nil }()
-	for _, sum := range sums {
-		ssum := sum.String()
-		xfn := repos.Expand(ssum)
-		xf, err := os.Open(xfn)
+	links := []*PDU{NewPDUFN(sumFN)}
+	for _, xsum := range sums {
+		xssum := xsum.String()
+		xsumFN := repos.Expand(xssum)
+		xsumf, err := os.Open(xsumFN)
 		if err != nil {
 			panic(err)
 		}
-		xblob, err := NewBlobFrom(xf)
+		xblob, err := NewBlobFrom(xsumf)
+		xsumf.Close()
 		if err != nil {
 			panic(err)
 		}
 		xowner := repos.Users.Search(&xblob.Owner)
-		xblobfn := xblob.FN(ssum)
-		subscribers := xowner.ASN.Subscribers
-		if xblob.Name == "" || xblob.Name == "asn/messages/" ||
-			xblob.Name == "asn/messages" {
-			for _, moderator := range xowner.ASN.Moderators {
-				if moderator == blob.Author {
-					for _, sub := range subscribers {
-						if sub != blob.Author {
-							s := sub.String()
-							dst := repos.Expand(s,
-								"asn/messages",
-								xblobfn)
-							out = ReposLN(out, xfn,
-								dst)
-						}
-					}
-					if xblob.Owner != blob.Author {
-						s := xblob.Owner.String()
-						dst := repos.Expand(s,
-							"asn/messages",
-							xblobfn)
-						out = ReposLN(out, xfn, dst)
-					}
+		xblobfn := xblob.FN(xssum)
+		for _, xmod := range xowner.ASN.Moderators {
+			if blob.Author.Equal(&xmod) {
+				for _, sub := range xowner.ASN.Subscribers {
+					user := repos.Users.Search(&sub)
+					fn := repos.join(user.expand(
+						"asn/messages", xblobfn))
+					reposLN(xsumFN, fn)
+					links = append(links, NewPDUFN(fn))
 				}
 			}
 		}
 	}
-	return out
+	return links
 }
 
-// Free repos cache
+// File mark blob by always overwriting current mark.
+// Also, don't mirror "actual" user marks.
+func (repos *Repos) mkMarkLinks(blob *Blob, sum *Sum, sumFN string) []*PDU {
+	owner := repos.searchOrNewUser(&blob.Owner)
+	fn := repos.join(owner.expand("asn/mark"))
+	syscall.Unlink(fn)
+	reposLN(sumFN, fn)
+	if owner.ASN.User == "actual" {
+		return []*PDU{
+			0: nil,
+			1: NewPDUFN(fn),
+		}
+	}
+	return []*PDU{
+		0: NewPDUFN(sumFN),
+		1: NewPDUFN(fn),
+	}
+}
+
+// if necessary, forward messages through moderators; otherwise, directly link
+// as author, owner, and subscriber's "asn/messages/EPOCH_SHA"
+func (repos *Repos) mkMessageLinks(blob *Blob, sum *Sum, sumFN string) []*PDU {
+	author := repos.searchOrNewUser(&blob.Author)
+	owner := repos.searchOrNewUser(&blob.Owner)
+	blobFN := blob.FN(sum.String())
+	authorFN := repos.join(author.expand("asn/messages", blobFN))
+	ownerFN := repos.join(owner.expand("asn/messages", blobFN))
+	reposLN(sumFN, authorFN)
+	if n := len(owner.ASN.Moderators); n > 0 {
+		links := make([]*PDU, n+2)
+		links[0] = NewPDUFN(sumFN)
+		links[1] = NewPDUFN(authorFN)
+		for i, k := range owner.ASN.Moderators {
+			user := repos.searchOrNewUser(k)
+			fn := repos.join(user.expand("asn/messages", blobFN))
+			reposLN(sumFN, fn)
+			links[i+2] = NewPDUFN(fn)
+		}
+		return links
+	} else if n = len(owner.ASN.Subscribers); n > 0 {
+		var (
+			o     int
+			links []*PDU
+		)
+		if !owner.Key.Equal(author.Key) {
+			o = 3
+			links = make([]*PDU, n+o)
+			links[0] = NewPDUFN(sumFN)
+			links[1] = NewPDUFN(authorFN)
+			links[2] = NewPDUFN(ownerFN)
+		} else {
+			links = make([]*PDU, n+o)
+			links[0] = NewPDUFN(sumFN)
+			links[1] = NewPDUFN(authorFN)
+		}
+		for i, k := range owner.ASN.Subscribers {
+			if k != *author.Key {
+				user := repos.searchOrNewUser(k)
+				fn := repos.join(user.expand("asn/messages",
+					blobFN))
+				reposLN(sumFN, fn)
+				links[i+o] = NewPDUFN(fn)
+			}
+		}
+		return links
+	} else if !owner.Key.Equal(author.Key) {
+		reposLN(sumFN, ownerFN)
+		return []*PDU{
+			NewPDUFN(sumFN),
+			NewPDUFN(authorFN),
+			NewPDUFN(ownerFN),
+		}
+	}
+	return []*PDU{
+		NewPDUFN(sumFN),
+		NewPDUFN(authorFN),
+	}
+}
+
+// File remove blob and unlink it's referenced blobs
+func (repos *Repos) mkRemovalLinks(blob *Blob, sum *Sum, sumFN string) []*PDU {
+	// FIXME
+	return nil
+}
+
 func (repos *Repos) Free() {
 	if repos == nil {
 		return
 	}
-	repos.Tmp.Free()
-	repos.Users.Free()
+	repos.Tmp.free()
+	repos.Users.free()
 	repos.Tmp = nil
 	repos.Users = nil
 }
 
+func (repos *Repos) join(elements ...string) string {
+	return repos.DN + reposPS + filepath.Join(elements...)
+}
+
+func (repos *Repos) newTmp() {
+	tmpDN := repos.join("tmp")
+	x, err := ioutil.ReadDir(tmpDN)
+	if err == nil {
+		// flush hanging tmp files
+		for _, fi := range x {
+			syscall.Unlink(fi.Name())
+		}
+		x = nil
+	} else if os.IsNotExist(err) {
+		if err = os.MkdirAll(tmpDN, ReposPerm); err != nil {
+			panic(err)
+		}
+	}
+	repos.Tmp = &ReposTmp{
+		DN:    tmpDN,
+		i:     0,
+		mutex: new(sync.Mutex),
+	}
+}
+
+// NewUser creates a cached user and repos directory
 func (repos *Repos) NewUser(v interface{}) (user *ReposUser, err error) {
-	user = new(ReposUser)
-	repos.Users.mutex.Lock()
 	defer func() {
-		repos.Users.mutex.Unlock()
-		if err != nil {
-			user = nil
+		if perr := recover(); perr != nil {
+			err = perr.(error)
 		}
 	}()
+	user = repos.newUser(v)
+	return
+}
+
+// newUser will panic on error so the calling function must recover.
+func (repos *Repos) newUser(v interface{}) *ReposUser {
+	user := new(ReposUser)
+	repos.Users.mutex.Lock()
+	defer repos.Users.mutex.Unlock()
 	var i int
 	n := len(repos.Users.Entry)
 	switch t := v.(type) {
@@ -507,7 +507,7 @@ func (repos *Repos) NewUser(v interface{}) (user *ReposUser, err error) {
 			return repos.Users.Entry[i].String >= t
 		})
 		user.String = t
-		user.Key, err = NewEncrPubString(user.String)
+		user.Key = newEncrPub(user.String)
 	case *EncrPub:
 		i = sort.Search(n, func(i int) bool {
 			return bytes.Compare(repos.Users.Entry[i].Key[:],
@@ -516,10 +516,7 @@ func (repos *Repos) NewUser(v interface{}) (user *ReposUser, err error) {
 		user.Key = t
 		user.String = user.Key.String()
 	default:
-		err = os.ErrInvalid
-	}
-	if err != nil {
-		return
+		panic(os.ErrInvalid)
 	}
 	if i == n {
 		repos.Users.Entry = append(repos.Users.Entry, user)
@@ -529,8 +526,48 @@ func (repos *Repos) NewUser(v interface{}) (user *ReposUser, err error) {
 				(repos.Users.Entry[i:])...)...)
 	}
 	userdn := repos.Expand(repos.Users.Entry[i].String)
-	if _, err = os.Stat(userdn); err != nil {
-		err = os.MkdirAll(userdn, ReposPerm)
+	if _, err := os.Stat(userdn); err != nil {
+		if err = os.MkdirAll(userdn, ReposPerm); err != nil {
+			user = nil
+			panic(err)
+		}
+	}
+	return user
+}
+
+func (repos *Repos) newUsers() {
+	repos.Users = &ReposUsers{
+		mutex: new(sync.Mutex),
+	}
+	var (
+		topdir []os.FileInfo
+		subdir []os.FileInfo
+		err    error
+	)
+	defer func() {
+		topdir = nil
+		subdir = nil
+	}()
+	if topdir, err = ioutil.ReadDir(repos.DN); err != nil {
+		panic(err)
+	}
+	for _, fi := range topdir {
+		if fi.IsDir() && len(fi.Name()) == reposTopSz {
+			subdn := repos.join(fi.Name())
+			if subdir, err = ioutil.ReadDir(subdn); err != nil {
+				panic(err)
+			}
+			for _, sub := range subdir {
+				if sub.IsDir() && reposIsUser(sub.Name()) {
+					user := &ReposUser{
+						String: fi.Name() + sub.Name(),
+					}
+					repos.load(user)
+					repos.Users.add(user)
+					user = nil
+				}
+			}
+		}
 	}
 	return
 }
@@ -570,7 +607,7 @@ func (repos *Repos) Permission(blob *Blob, user *ReposUser,
 	if *login == blob.Owner || *login == user.ASN.Author {
 		return nil
 	}
-	if KeysHasKey(user.ASN.Editors, login) {
+	if user.ASN.Editors.Has(login) {
 		return nil
 	}
 	return os.ErrPermission
@@ -578,10 +615,10 @@ func (repos *Repos) Permission(blob *Blob, user *ReposUser,
 
 // Search the repos for the unique longest matching blob file.
 func (repos *Repos) Search(x string) (match string, err error) {
-	topdn := ReposTopDN(x)
-	subdfn := ReposSubDFN(x)
+	topdn := reposTopDN(x)
+	subdfn := reposSubDFN(x)
 	lensubdfn := len(subdfn)
-	topf, err := os.Open(filepath.Join(repos.DN, topdn))
+	topf, err := os.Open(repos.join(topdn))
 	if err != nil {
 		return
 	}
@@ -598,8 +635,7 @@ func (repos *Repos) Search(x string) (match string, err error) {
 						err = ErrAmbiguos
 						return
 					}
-					match = filepath.Join(topf.Name(),
-						name)
+					match = repos.join(topdn, name)
 				}
 			}
 		} else {
@@ -611,22 +647,12 @@ func (repos *Repos) Search(x string) (match string, err error) {
 	}
 }
 
-// ReposLN creates directories if required then hard links dst with src.
-// This panic's on error so the calling function must recover.
-func ReposLN(ilinks []*PDU, src, dst string) []*PDU {
-	dn := filepath.Dir(dst)
-	if _, err := os.Stat(dn); err != nil {
-		if !os.IsNotExist(err) {
-			panic(err)
-		}
-		if err := os.MkdirAll(dn, ReposPerm); err != nil {
-			panic(err)
-		}
+func (repos *Repos) searchOrNewUser(v interface{}) *ReposUser {
+	user := repos.Users.Search(v)
+	if user == nil {
+		user = repos.newUser(v)
 	}
-	if err := syscall.Link(src, dst); err != nil {
-		panic(err)
-	}
-	return append(ilinks, NewPDUFN(dst))
+	return user
 }
 
 func IsHex(s string) bool {
@@ -643,40 +669,46 @@ func IsHex(s string) bool {
 	return true
 }
 
-func IsBlobENT(fn string) bool {
-	return IsHex(fn) && len(fn) == 2*(SumSz-1)
-}
-
-func IsUserENT(fn string) bool {
-	return IsHex(fn) && len(fn) == 2*(EncrPubSz-1)
-}
-
-// ReposSplitDFN returns the argument split into top and sub-directory or file
-// (partial) name elements.
-func ReposSplitDFN(arg string) (top, sub string) {
-	return arg[:reposTopSz], arg[reposTopSz:]
-}
-
-// ReposSubDFN returns the argument's trailing sub directory or file
-// (partial) name.
-func ReposSubDFN(arg string) string {
-	return arg[reposTopSz:]
-}
-
-// ReposTopDN returns the argument's top directory name
-func ReposTopDN(arg string) string {
-	return arg[:reposTopSz]
-}
-
-func PN(repos Reposer, args ...string) string {
-	return filepath.Join(append([]string{repos.DN()}, args...)...)
-}
-
-func KeysHasKey(keys []EncrPub, x *EncrPub) bool {
-	for _, k := range keys {
-		if k == *x {
+func reposIsTmpFN(fn string) bool {
+	for _, pat := range []string{
+		reposTmpPat,
+		reposBridgePat,
+	} {
+		if i := strings.Index(fn, pat); i > 0 {
 			return true
 		}
 	}
 	return false
+}
+
+func reposIsUser(fn string) bool {
+	return IsHex(fn) && len(fn) == 2*(EncrPubSz-1)
+}
+
+// reposLN creates directories if required then hard links dst with src.
+// reposLN panic's on error so the calling function must recover.
+func reposLN(src, dst string) {
+	dn := filepath.Dir(dst)
+	if _, err := os.Stat(dn); err != nil {
+		if !os.IsNotExist(err) {
+			panic(err)
+		}
+		if err := os.MkdirAll(dn, ReposPerm); err != nil {
+			panic(err)
+		}
+	}
+	if err := syscall.Link(src, dst); err != nil {
+		panic(err)
+	}
+}
+
+// reposSubDFN returns the argument's trailing sub directory or file
+// (partial) name.
+func reposSubDFN(arg string) string {
+	return arg[reposTopSz:]
+}
+
+// reposTopDN returns the argument's top directory name
+func reposTopDN(arg string) string {
+	return arg[:reposTopSz]
 }

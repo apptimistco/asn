@@ -253,7 +253,7 @@ func (ses *Ses) ExecCat(args ...string) interface{} {
 		if err != nil {
 			return err
 		}
-		if _, err = asn.SeekBlobContent(f); err != nil {
+		if _, err = asn.BlobSeek(f); err != nil {
 			f.Close()
 			return err
 		}
@@ -716,36 +716,16 @@ func (ses *Ses) NewBlob(owner, author *asn.ReposUser, name string,
 		blob.Free()
 		blob = nil
 	}()
-	pdus, sum, err := ses.srv.repos.File(blob, v)
-	if err == nil {
-		ses.srv.ForEachSession(func(x *Ses) {
-			if x == ses {
-				return
-			}
-			login := x.Keys.Client.Login
-			slogin := login.String()
-			server := x.srv.Config.Keys.Server.Pub.Encr
-			if login.Equal(server) {
-				if pdus[0] != nil {
-					x.ASN.Tx(pdus[0])
-				}
-				return
-			}
-			for _, pdu := range pdus[1:] {
-				suser, _ := x.srv.repos.ParsePath(pdu.FN)
-				if suser != "" && suser == slogin[:len(suser)] {
-					x.ASN.Tx(pdu)
-					// be sure to send only one per session
-					return
-				}
-			}
-		})
+	sum, fn, err := ses.srv.repos.File(blob, v)
+	if err != nil {
+		return
 	}
-	for i := range pdus {
-		pdus[i].Free()
-		pdus[i] = nil
+	links, err := ses.srv.repos.MkLinks(blob, sum, fn)
+	if err != nil {
+		return
 	}
-	pdus = nil
+	ses.dist(links)
+	links = nil
 	return
 }
 

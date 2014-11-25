@@ -53,78 +53,55 @@ func BlobTime(v interface{}) (t time.Time) {
 	return
 }
 
-func ReadBlobContent(b []byte, fn string) (n int, err error) {
+// blobGets will panic on error so the calling function must recover.
+func blobGets(fn string) string {
 	f, err := os.Open(fn)
 	if err != nil {
-		return
-	}
-	defer f.Close()
-	if _, err = SeekBlobContent(f); err != nil {
-		return
-	}
-	n, err = f.Read(b)
-	return
-}
-
-func ReadBlobKeyList(fn string) (keys []EncrPub, err error) {
-	f, err := os.Open(fn)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	pos, err := SeekBlobContent(f)
-	if err != nil {
-		return
-	}
-	fi, err := f.Stat()
-	if err != nil {
-		return
-	}
-	n := int(fi.Size()-pos) / EncrPubSz
-	keys = make([]EncrPub, n)
-	for i := 0; i < n; i++ {
-		f.Read(keys[i][:])
-	}
-	return
-}
-
-// ReadBlobSumList from named file.
-// This panic's on error so the calling function must recover.
-func readBlobSumList(fn string) []Sum {
-	f, err := os.Open(fn)
-	if err != nil {
+		if os.IsNotExist(err) {
+			return ""
+		}
 		panic(err)
 	}
 	defer f.Close()
-	pos, err := SeekBlobContent(f)
-	if err != nil {
-		panic(err)
-	}
+	pos := blobSeek(f)
 	fi, err := f.Stat()
 	if err != nil {
 		panic(err)
 	}
-	n := int(fi.Size()-pos) / SumSz
-	sums := make([]Sum, n)
-	for i := 0; i < n; i++ {
-		f.Read(sums[i][:])
+	b := make([]byte, int(fi.Size()-pos))
+	if _, err = f.Read(b); err != nil {
+		panic(err)
 	}
-	return sums
+	return string(b)
 }
 
-// SeekBlobContent moves the ReadSeeker past the ASN blob headers
-func SeekBlobContent(r io.ReadSeeker) (n int64, err error) {
+// BlobSeek moves the ReadSeeker past the ASN blob headers
+func BlobSeek(r io.ReadSeeker) (n int64, err error) {
+	defer func() {
+		if perr := recover(); perr != nil {
+			err = perr.(error)
+		}
+	}()
+	n = blobSeek(r)
+	return
+}
+
+// blobSeek will panic on error so the calling function must recover.
+func blobSeek(r io.ReadSeeker) int64 {
 	var b [1]byte
-	n, err = r.Seek(BlobNameLenOff, os.SEEK_SET)
+	_, err := r.Seek(BlobNameLenOff, os.SEEK_SET)
 	if err != nil {
-		return
+		panic(err)
 	}
 	_, err = r.Read(b[:])
 	if err != nil {
-		return
+		panic(err)
 	}
-	n, err = r.Seek(int64(b[0]), os.SEEK_CUR)
-	return
+	n, err := r.Seek(int64(b[0]), os.SEEK_CUR)
+	if err != nil {
+		panic(err)
+	}
+	return n
 }
 
 type Blob struct {

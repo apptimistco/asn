@@ -310,10 +310,11 @@ func (adm *Adm) File(pdu *asn.PDU) {
 		asn.Diag.Println(adm.asn.Name, "Error:", err)
 		return
 	}
-	links, _, err := adm.asn.Repos.File(blob, pdu)
+	sum, fn, err := adm.asn.Repos.File(blob, pdu)
 	if err != nil {
 		asn.Diag.Println(adm.asn.Name, err)
 	}
+	links, err := adm.asn.Repos.MkLinks(blob, sum, fn)
 	for i := range links {
 		if links[i] != nil {
 			asn.Diag.Println(adm.asn.Name, "saved", links[i].FN)

@@ -4,9 +4,35 @@
 
 package asn
 
-import "io"
+import (
+	"io"
+	"os"
+)
 
 type Sums []Sum
+
+// fromBlob from named file.
+// fromBlob will panic on error so the calling function must recover.
+func (sums *Sums) fromBlob(fn string) {
+	f, err := os.Open(fn)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return
+		}
+		panic(err)
+	}
+	defer f.Close()
+	pos := blobSeek(f)
+	fi, err := f.Stat()
+	if err != nil {
+		panic(err)
+	}
+	n := int(fi.Size()-pos) / SumSz
+	*sums = Sums(make([]Sum, n))
+	for i := 0; i < n; i++ {
+		f.Read([]Sum(*sums)[i][:])
+	}
+}
 
 // Sums{}.ReadFrom *after* Name{}.ReadFrom
 func (p *Sums) ReadFrom(r LenReader) (n int64, err error) {

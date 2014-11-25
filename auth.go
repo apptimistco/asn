@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"github.com/agl/ed25519"
+	"os"
 )
 
 const (
@@ -41,6 +42,24 @@ func NewRandomAuthKeys() (*AuthPub, *AuthSec, error) {
 func (pub *AuthPub) Bytes() (b []byte) {
 	copy(b[:], pub[:])
 	return
+}
+
+// fromBlob will panic on error so the calling function must recover.
+func (pub *AuthPub) fromBlob(fn string) int {
+	f, err := os.Open(fn)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0
+		}
+		panic(err)
+	}
+	defer f.Close()
+	blobSeek(f)
+	n, err := f.Read(pub[:])
+	if err != nil {
+		panic(err)
+	}
+	return n
 }
 
 func (pub *AuthPub) GetYAML() (string, interface{}) {
