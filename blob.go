@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -31,6 +32,28 @@ var (
 )
 
 func init() { BlobPool = make(chan *Blob, 16) }
+
+func BlobFilter(fn string, epoch time.Time,
+	f func(fn string) error) (err error) {
+	fi, err := os.Stat(fn)
+	if err != nil {
+		return
+	}
+	if fi.IsDir() {
+		filepath.Walk(fn,
+			func(wn string, info os.FileInfo, err error) error {
+				if err == nil && !info.IsDir() &&
+					(epoch.IsZero() ||
+						BlobTime(wn).After(epoch)) {
+					err = f(wn)
+				}
+				return err
+			})
+	} else if epoch.IsZero() || BlobTime(fn).After(epoch) {
+		err = f(fn)
+	}
+	return
+}
 
 // BlobTime seeks and reads time from named or opened file.
 func BlobTime(v interface{}) (t time.Time) {

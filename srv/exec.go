@@ -379,14 +379,16 @@ func (ses *Ses) ExecLS(args ...string) interface{} {
 	var out []byte
 	slogin := ses.Keys.Client.Login.String()
 	err := ses.Blobber(func(path string) error {
-		suser, path := ses.srv.repos.ParsePath(path)
-		if suser != "" && suser != slogin[:len(suser)] {
-			out = append(out, []byte(suser[:16])...)
+		usersum, path := ses.srv.repos.ParsePath(path)
+		if usersum != slogin {
+			out = append(out, []byte(usersum[:16])...)
 			if path != "" {
 				out = append(out, os.PathSeparator)
 			}
 		}
-		out = append(out, []byte(path)...)
+		if path != "" {
+			out = append(out, []byte(path)...)
+		}
 		out = append(out, '\n')
 		return nil
 	}, args...)
@@ -609,28 +611,6 @@ func (ses *Ses) ExecWho(args ...string) interface{} {
 	return ErrFIXME
 }
 
-func BlobFilter(fn string, epoch time.Time,
-	f func(fn string) error) (err error) {
-	fi, err := os.Stat(fn)
-	if err != nil {
-		return
-	}
-	if fi.IsDir() {
-		filepath.Walk(fn,
-			func(wn string, info os.FileInfo, err error) error {
-				if err == nil && !info.IsDir() &&
-					(epoch.IsZero() ||
-						asn.BlobTime(wn).After(epoch)) {
-					err = f(wn)
-				}
-				return err
-			})
-	} else if epoch.IsZero() || asn.BlobTime(fn).After(epoch) {
-		err = f(fn)
-	}
-	return
-}
-
 func (ses *Ses) Blobber(f func(path string) error, args ...string) error {
 	var (
 		epoch time.Time
@@ -650,9 +630,14 @@ argLoop:
 		user = login
 		epoch, arg = StripEpoch(arg)
 		if _, err := os.Stat(arg); err == nil { // DIR or FILE
-			BlobFilter(arg, epoch, f)
+			asn.BlobFilter(arg, epoch, f)
 			continue argLoop
 		} else if asn.IsHex(arg) { // USER or SHA
+			if strings.HasPrefix(server, arg) { // SERVER
+				// list all blobs newer than epoch
+				ses.srv.repos.Filter(epoch, f)
+				continue argLoop
+			}
 			user = ses.srv.repos.Users.Search(arg)
 			if user != nil {
 				arg = ""
@@ -662,7 +647,7 @@ argLoop:
 			} else if match == "" {
 				return asn.ErrNOENT
 			} else { // SHA
-				BlobFilter(match, epoch, f)
+				asn.BlobFilter(match, epoch, f)
 				continue argLoop
 			}
 		} else if slash := strings.Index(arg, "/"); slash > 0 &&
@@ -685,7 +670,7 @@ argLoop:
 			matches, err := filepath.Glob(xn)
 			if len(matches) > 0 {
 				for _, match := range matches {
-					BlobFilter(match, epoch, f)
+					asn.BlobFilter(match, epoch, f)
 				}
 			} else if err != nil {
 				return err
@@ -698,7 +683,7 @@ argLoop:
 				matches, err := filepath.Glob(xn)
 				if len(matches) > 0 {
 					for _, match := range matches {
-						BlobFilter(match, epoch, f)
+						asn.BlobFilter(match, epoch, f)
 					}
 				} else if err != nil {
 					return err

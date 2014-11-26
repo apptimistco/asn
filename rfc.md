@@ -286,7 +286,8 @@ BLOB is one of these ASN object references:
     BLOB = <FILE|SUM|USER[@EPOCH]|[USER]@EPOCH|[USER/]NAME[@EPOCH]>
 
 The default USER is LOGIN and the wild card USER is SERVICE meaning for all
-users.
+users if followed by a path NAME; otherwise, SERVICE by itself or with @EPOCH
+is wildcard for all SUM files.
 
 FILE is a local file system name used only in testing.
 

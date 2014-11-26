@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 const (
@@ -239,6 +240,73 @@ func (repos *Repos) File(blob *Blob, v interface{}) (sum *Sum, fn string,
 		return
 	}
 	reposLN(tfn, fn)
+	return
+}
+
+// Filter all REPOS/SHA files after epoch
+func (repos *Repos) Filter(epoch time.Time,
+	f func(fn string) error) (err error) {
+	var (
+		topdir, subdir *os.File
+		topfis, subfis []os.FileInfo
+	)
+	topdir, err = os.Open(repos.DN)
+	if err != nil {
+		return
+	}
+	defer func() {
+		if err == io.EOF {
+			err = nil
+		}
+		topdir.Close()
+		subdir.Close()
+		topdir = nil
+		subdir = nil
+		topfis = nil
+		subfis = nil
+	}()
+topdirloop:
+	for {
+		topfis, err = topdir.Readdir(16)
+		if err != nil {
+			break topdirloop
+		}
+	topfiloop:
+		for _, topfi := range topfis {
+			if !reposIsTopDir(topfi) {
+				continue topfiloop
+			}
+			subfn := repos.join(topfi.Name())
+			if subdir, err = os.Open(subfn); err != nil {
+				return
+			}
+		subdirloop:
+			for {
+				subfis, err = subdir.Readdir(16)
+				if err == io.EOF {
+					break subdirloop
+				}
+				if err != nil {
+					return
+				}
+			subfiloop:
+				for _, subfi := range subfis {
+					if !reposIsBlob(subfi) {
+						continue subfiloop
+					}
+					fn := repos.join(topfi.Name(),
+						subfi.Name())
+					if epoch.IsZero() ||
+						BlobTime(fn).After(epoch) {
+						if err = f(fn); err != nil {
+							return
+						}
+					}
+				}
+			}
+		}
+		topfis, err = topdir.Readdir(16)
+	}
 	return
 }
 
@@ -572,7 +640,7 @@ func (repos *Repos) newUsers() {
 	return
 }
 
-func (repos Repos) ParsePath(pn string) (userOrSHA, remainder string) {
+func (repos Repos) ParsePath(pn string) (usersum, remainder string) {
 	if strings.HasPrefix(pn, repos.DN) {
 		pn = repos.DePrefix(pn)
 	}
@@ -584,12 +652,12 @@ func (repos Repos) ParsePath(pn string) (userOrSHA, remainder string) {
 	pn = pn[reposTopSz+1:]
 	slash := strings.IndexByte(pn, os.PathSeparator)
 	if IsHex(pn) {
-		userOrSHA = topDN + pn
+		usersum = topDN + pn
 	} else if slash > 0 && IsHex(pn[:slash]) {
-		userOrSHA = topDN + pn[:slash]
+		usersum = topDN + pn[:slash]
 		remainder = pn[slash+1:]
 	} else {
-		userOrSHA = "Invalid repos path"
+		usersum = "Invalid repos path"
 		remainder = topDN + pn
 	}
 	return
@@ -679,6 +747,16 @@ func reposIsTmpFN(fn string) bool {
 		}
 	}
 	return false
+}
+
+func reposIsTopDir(fi os.FileInfo) bool {
+	fn := fi.Name()
+	return fi.IsDir() && len(fn) == 2 && IsHex(fn)
+}
+
+func reposIsBlob(fi os.FileInfo) bool {
+	fn := fi.Name()
+	return !fi.IsDir() && len(fn) == 2*(SumSz-1) && IsHex(fn)
 }
 
 func reposIsUser(fn string) bool {
