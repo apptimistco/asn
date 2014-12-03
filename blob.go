@@ -5,6 +5,7 @@
 package asn
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha512"
 	"errors"
@@ -284,6 +285,8 @@ func (blob *Blob) SummingWriteContentsTo(w io.Writer, v interface{}) (sum *Sum,
 	case Mark:
 		err = x.Plus(t.WriteTo(m))
 	case Sums:
+		err = x.Plus(t.WriteTo(m))
+	case *bytes.Buffer:
 		err = x.Plus(t.WriteTo(m))
 	case []byte:
 		err = x.Plus(m.Write(t))

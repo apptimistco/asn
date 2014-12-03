@@ -5,8 +5,12 @@
 package srv
 
 import (
+	"bufio"
 	"crypto/rand"
 	"github.com/apptimistco/asn"
+	"os"
+	"strings"
+	"syscall"
 )
 
 type Ses struct {
@@ -70,11 +74,14 @@ func (ses *Ses) dist(pdus []*asn.PDU) {
 			return
 		}
 		for _, pdu := range pdus[1:] {
-			suser, _ := x.srv.repos.ParsePath(pdu.FN)
-			if suser != "" && suser == slogin[:len(suser)] {
-				x.ASN.Tx(pdu)
-				// be sure to send only one per session
-				return
+			if pdu != nil {
+				suser, _ := x.srv.repos.ParsePath(pdu.FN)
+				if suser != "" &&
+					suser == slogin[:len(suser)] {
+					x.ASN.Tx(pdu)
+					// be sure to send only one per session
+					return
+				}
 			}
 		}
 	})
@@ -117,6 +124,33 @@ func (ses *Ses) Rekey(req asn.Requester) {
 	ses.ASN.Println("rekeyed with", pub.String()[:8]+"...")
 }
 
+// removals: if pdus[1] is a filename containing "asn/removals",
+// remove the referenced files, then the "asn/removals/" link.
+// However, keep the SUM file to distribute with clone.
+func (ses *Ses) removals(pdus []*asn.PDU) {
+	if len(pdus) == 2 && pdus[1] != nil &&
+		strings.Contains(pdus[1].FN, "asn/removals") {
+		f, err := os.Open(pdus[1].FN)
+		if err != nil {
+			return
+		}
+		defer func() {
+			f.Close()
+			syscall.Unlink(pdus[1].FN)
+			pdus[1].Free()
+			pdus[1] = nil
+		}()
+		asn.BlobSeek(f)
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			fn := ses.srv.repos.Join(scanner.Text())
+			asn.Diag.Println("unlinked", fn)
+			syscall.Unlink(fn)
+		}
+		scanner = nil
+	}
+}
+
 func (ses *Ses) RxBlob(pdu *asn.PDU) (err error) {
 	blob, err := asn.NewBlobFrom(pdu)
 	if err != nil {
@@ -134,6 +168,7 @@ func (ses *Ses) RxBlob(pdu *asn.PDU) (err error) {
 	if err != nil {
 		return
 	}
+	ses.removals(links)
 	ses.dist(links)
 	links = nil
 	return

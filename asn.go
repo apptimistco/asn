@@ -5,6 +5,7 @@
 package asn
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"net"
@@ -164,6 +165,9 @@ func (asn *ASN) Ack(req Requester, argv ...interface{}) {
 	)
 	if len(argv) == 1 {
 		switch t := argv[0].(type) {
+		case *PDU:
+			asn.Tx(t)
+			return
 		case error:
 			err = t
 			argv = argv[1:]
@@ -201,9 +205,31 @@ func (asn *ASN) Ack(req Requester, argv ...interface{}) {
 	asn.Tx(pdu)
 }
 
+// AckOut is used by the above asn.Ack to write Ack content to the given
+// writer. It is also used by asnsrv to print Ack content to Stdout.
 func AckOut(w io.Writer, argv ...interface{}) {
 	for _, v := range argv {
 		switch t := v.(type) {
+		case *PDU:
+			if err := t.Open(); err == nil {
+				var (
+					v   Version
+					id  Id
+					req Requester
+					ec  Err
+				)
+				v.ReadFrom(t)
+				id.ReadFrom(t)
+				req.ReadFrom(t)
+				ec.ReadFrom(t)
+				if ec != Success {
+					w.Write([]byte("Error: "))
+				}
+				t.WriteTo(w)
+			}
+			t.Free()
+		case *bytes.Buffer:
+			t.WriteTo(w)
 		case []byte:
 			w.Write(t)
 		case string:
@@ -221,6 +247,23 @@ func AckOut(w io.Writer, argv ...interface{}) {
 			w.Write([]byte("\n"))
 		}
 	}
+}
+
+// NewAckSuccessPDUFile creates a temp file preloaded with the asn success ack
+// header and ready to write success data.
+func (asn *ASN) NewAckSuccessPDUFile(req Requester) (pdu *PDU, err error) {
+	f, err := asn.Repos.Tmp.NewFile()
+	if err != nil {
+		return
+	}
+	pdu = NewPDUFile(f)
+	f = nil
+	v := asn.version
+	v.WriteTo(pdu)
+	AckReqId.Version(v).WriteTo(pdu)
+	req.WriteTo(pdu)
+	Success.Version(v).WriteTo(pdu)
+	return
 }
 
 func (asn *ASN) Conn() net.Conn      { return asn.conn }

@@ -6,7 +6,6 @@ package asn
 
 import (
 	"io"
-	"os"
 )
 
 type Id uint8
@@ -36,8 +35,6 @@ const (
 	UnknownId
 
 	MaxId = 16
-
-	delFlag Id = 0x80
 )
 
 const (
@@ -115,21 +112,6 @@ func (p *Id) Internal(v Version) {
 	}
 }
 
-// IsDeleted is true if Id is flaged for deletion by garbage collector
-func (id Id) IsDeleted() bool {
-	return (id & delFlag) != 0
-}
-
-// Flag for Deletion by garbage collector
-func (p *Id) FlagDeletion() {
-	*p = *p | delFlag
-}
-
-// UnFlag Deletion
-func (p *Id) UnFlagDeletion() {
-	*p = *p & ^delFlag
-}
-
 func (p *Id) ReadFrom(r io.Reader) (n int64, err error) {
 	var b [1]byte
 	ni, err := r.Read(b[:])
@@ -165,46 +147,4 @@ func (id Id) WriteTo(w io.Writer) (n int64, err error) {
 		n = int64(ni)
 	}
 	return
-}
-
-// Flag named file for Deletion by garbage collector
-func FlagDeletion(name string) (err error) {
-	return xFlagDeletion(name, func(id Id) Id {
-		return id | delFlag
-	})
-}
-
-// UnFlag named file for Deletion by garbage collector
-func UnFlagDeletion(name string) (err error) {
-	return xFlagDeletion(name, func(id Id) Id {
-		return id & ^delFlag
-	})
-}
-
-func xFlagDeletion(name string, x func(Id) Id) (err error) {
-	var id Id
-	f, err := os.OpenFile(name, os.O_RDWR, 0660)
-	if err != nil {
-		return
-	}
-	f.Seek(IdOff, os.SEEK_SET)
-	id.ReadFrom(f)
-	id = x(id)
-	f.Seek(IdOff, os.SEEK_SET)
-	id.WriteTo(f)
-	f.Close()
-	return
-}
-
-// IsDeleted is true if named object file is flaged for deletion
-func IsDeleted(name string) bool {
-	var id Id
-	f, err := os.OpenFile(name, os.O_RDWR, 0660)
-	if err != nil {
-		return false
-	}
-	f.Seek(1, os.SEEK_SET)
-	id.ReadFrom(f)
-	f.Close()
-	return id.IsDeleted()
 }

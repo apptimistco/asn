@@ -376,7 +376,7 @@ This requests blobs with the given SHA sums.
     gc [@EPOCH]
 
 An administrator may exec this command in the `established` state for the
-server to purge older or all blobs flagged for deletion.
+server to remove all singularly linked SUM files.
 
 ### ls ###
     ls BLOB...
@@ -454,10 +454,9 @@ acknowledge with a decoded header of the matching blob.
 
 The device may exec this command in the `established` state for the server to
 create, process and distribute a [Removal](#removal) blob.  While processing,
-the server doesn't immediately remove these objects; instead, it merely flags
-these for later, independent purge by the garbage collector of each mirror.
-The removal flags may be reverted by removing the generated removal object
-(`asn/removals/SUM`) before garbage collection.
+each server only removes the named files. To remove all instances of the file
+one must also remove the SUM reference. However, these may be cleaned later
+with the garbage collector.
 
 ### trace ###
     trace [COMMAND [ARG]]
@@ -488,8 +487,7 @@ acknowledged action, a blob conveys unacknowledged information.  The content
 of blobs, with the exception of [ASN Control](#asn-control), are opaque to the
 server.  These may be fetched and read by anyone so the App is generally
 responsible for security, compression, content identification and
-interpretation. Once written, blobs may not be modified other than being
-flagged for later removal during garbage collection.
+interpretation. Once written, blobs may not be modified.
 
     blob = version id magic random owner author epoch namelen name content
     version = uint8{ 0 }
@@ -612,16 +610,10 @@ zero `eta`.  The device may also exec the mark command with it's own `place`
 key to stop it's location report.
 
 ### Removal ###
-A `removal` is a blob named `asn/removals/` containing a list of 64-byte
-binary sums referencing blobs flagged for deletion. The server deletes all
-links associated with the referenced blobs before flagging these for later
-purge by its garbage collector. It also distributes the `removal` to all
-mirrors that repeat the process. Finally, it makes this link.
-
-    LOGIN:asn/removals/SUM
-
-Removals may be reverted by removing the associated removal blob before the
-garbage collector has purged the referenced blobs.
+A `removal` is a blob named `asn/removals/` containing a list of newline
+separated file names to be deleted.  The server only deletes the named file
+links so one must also remove the primary SUM link to eliminate all references
+or use the garbage collector to remove all singularly linked SUM files.
 
 ### Other Derived Names ###
 Any other blob named with a trailing forward slash ("/") is linked as this.

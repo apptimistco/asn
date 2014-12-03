@@ -193,7 +193,7 @@ func (repos *Repos) DePrefix(pn string) string {
 // expand converts the stringified user key or blob sum to respective repos
 // directory and file name.
 func (repos *Repos) Expand(hex string, elements ...string) string {
-	path := repos.join(reposTopDN(hex), reposSubDFN(hex))
+	path := repos.Join(reposTopDN(hex), reposSubDFN(hex))
 	for _, x := range elements {
 		path = filepath.Join(path, filepath.FromSlash(x))
 	}
@@ -202,12 +202,12 @@ func (repos *Repos) Expand(hex string, elements ...string) string {
 
 func (repos *Repos) load(user *ReposUser) {
 	user.Key = newEncrPub(user.String)
-	user.ASN.Auth.fromBlob(repos.join(user.expand("asn/auth")))
-	user.ASN.Author.fromBlob(repos.join(user.expand("asn/author")))
-	user.ASN.Editors.fromBlob(repos.join(user.expand("asn/editors")))
-	user.ASN.Moderators.fromBlob(repos.join(user.expand("asn/moderators")))
-	user.ASN.Subscribers.fromBlob(repos.join(user.expand("asn/subscribers")))
-	user.ASN.User = blobGets(repos.join(user.expand("asn/user")))
+	user.ASN.Auth.fromBlob(repos.Join(user.expand("asn/auth")))
+	user.ASN.Author.fromBlob(repos.Join(user.expand("asn/author")))
+	user.ASN.Editors.fromBlob(repos.Join(user.expand("asn/editors")))
+	user.ASN.Moderators.fromBlob(repos.Join(user.expand("asn/moderators")))
+	user.ASN.Subscribers.fromBlob(repos.Join(user.expand("asn/subscribers")))
+	user.ASN.User = blobGets(repos.Join(user.expand("asn/user")))
 	if user.ASN.User == "" {
 		user.ASN.User = "actual"
 	}
@@ -276,7 +276,7 @@ topdirloop:
 			if !reposIsTopDir(topfi) {
 				continue topfiloop
 			}
-			subfn := repos.join(topfi.Name())
+			subfn := repos.Join(topfi.Name())
 			if subdir, err = os.Open(subfn); err != nil {
 				return
 			}
@@ -294,7 +294,7 @@ topdirloop:
 					if !reposIsBlob(subfi) {
 						continue subfiloop
 					}
-					fn := repos.join(topfi.Name(),
+					fn := repos.Join(topfi.Name(),
 						subfi.Name())
 					if epoch.IsZero() ||
 						BlobTime(fn).After(epoch) {
@@ -331,10 +331,10 @@ func (repos *Repos) MkLinks(blob *Blob, sum *Sum, fn string) (links []*PDU,
 		links = repos.mkBridgeLinks(blob, sum, fn)
 	case blob.Name == "asn/mark":
 		links = repos.mkMarkLinks(blob, sum, fn)
-	case blob.Name == "asn/removals":
-		links = repos.mkRemovalLinks(blob, sum, fn)
-	case blob.Name == "asn/approvals":
+	case blob.Name == "asn/approvals/":
 		links = repos.mkForwardLinks(blob, sum, fn)
+	case blob.Name == "asn/removals/":
+		links = repos.mkRemoveLinks(blob, sum, fn)
 	case blob.Name[blobli] == '/':
 		links = repos.mkDerivedLinks(blob, sum, fn, blob.Name[:blobli])
 	default:
@@ -355,7 +355,7 @@ func (repos *Repos) mkBridgeLinks(blob *Blob, sum *Sum, sumFN string) []*PDU {
 	links := make([]*PDU, n+1)
 	for i, k := range owner.ASN.Subscribers {
 		user := repos.searchOrNewUser(k)
-		fn := repos.join(user.expand("asn/bridge", blobFN))
+		fn := repos.Join(user.expand("asn/bridge", blobFN))
 		reposLN(sumFN, fn)
 		links[i+1] = NewPDUFN(fn)
 	}
@@ -366,7 +366,7 @@ func (repos *Repos) mkBridgeLinks(blob *Blob, sum *Sum, sumFN string) []*PDU {
 func (repos *Repos) mkDerivedLinks(blob *Blob, sum *Sum,
 	sumFN, dn string) []*PDU {
 	owner := repos.searchOrNewUser(&blob.Owner)
-	fn := repos.join(owner.expand(dn, blob.FN(sum.String())))
+	fn := repos.Join(owner.expand(dn, blob.FN(sum.String())))
 	reposLN(sumFN, fn)
 	return []*PDU{
 		0: NewPDUFN(sumFN),
@@ -376,7 +376,7 @@ func (repos *Repos) mkDerivedLinks(blob *Blob, sum *Sum,
 
 func (repos *Repos) mkNamedLinks(blob *Blob, sum *Sum, sumFN string) []*PDU {
 	owner := repos.searchOrNewUser(&blob.Owner)
-	fn := repos.join(owner.expand(blob.Name))
+	fn := repos.Join(owner.expand(blob.Name))
 	if _, xerr := os.Stat(fn); xerr == nil {
 		if blob.Time.After(BlobTime(fn)) {
 			syscall.Unlink(fn)
@@ -420,7 +420,7 @@ func (repos *Repos) mkForwardLinks(blob *Blob, sum *Sum, sumFN string) []*PDU {
 			if blob.Author.Equal(&xmod) {
 				for _, sub := range xowner.ASN.Subscribers {
 					user := repos.Users.Search(&sub)
-					fn := repos.join(user.expand(
+					fn := repos.Join(user.expand(
 						"asn/messages", xblobfn))
 					reposLN(xsumFN, fn)
 					links = append(links, NewPDUFN(fn))
@@ -435,7 +435,7 @@ func (repos *Repos) mkForwardLinks(blob *Blob, sum *Sum, sumFN string) []*PDU {
 // Also, don't mirror "actual" user marks.
 func (repos *Repos) mkMarkLinks(blob *Blob, sum *Sum, sumFN string) []*PDU {
 	owner := repos.searchOrNewUser(&blob.Owner)
-	fn := repos.join(owner.expand("asn/mark"))
+	fn := repos.Join(owner.expand("asn/mark"))
 	syscall.Unlink(fn)
 	reposLN(sumFN, fn)
 	if owner.ASN.User == "actual" {
@@ -456,8 +456,8 @@ func (repos *Repos) mkMessageLinks(blob *Blob, sum *Sum, sumFN string) []*PDU {
 	author := repos.searchOrNewUser(&blob.Author)
 	owner := repos.searchOrNewUser(&blob.Owner)
 	blobFN := blob.FN(sum.String())
-	authorFN := repos.join(author.expand("asn/messages", blobFN))
-	ownerFN := repos.join(owner.expand("asn/messages", blobFN))
+	authorFN := repos.Join(author.expand("asn/messages", blobFN))
+	ownerFN := repos.Join(owner.expand("asn/messages", blobFN))
 	reposLN(sumFN, authorFN)
 	if n := len(owner.ASN.Moderators); n > 0 {
 		links := make([]*PDU, n+2)
@@ -465,7 +465,7 @@ func (repos *Repos) mkMessageLinks(blob *Blob, sum *Sum, sumFN string) []*PDU {
 		links[1] = NewPDUFN(authorFN)
 		for i, k := range owner.ASN.Moderators {
 			user := repos.searchOrNewUser(k)
-			fn := repos.join(user.expand("asn/messages", blobFN))
+			fn := repos.Join(user.expand("asn/messages", blobFN))
 			reposLN(sumFN, fn)
 			links[i+2] = NewPDUFN(fn)
 		}
@@ -489,7 +489,7 @@ func (repos *Repos) mkMessageLinks(blob *Blob, sum *Sum, sumFN string) []*PDU {
 		for i, k := range owner.ASN.Subscribers {
 			if k != *author.Key {
 				user := repos.searchOrNewUser(k)
-				fn := repos.join(user.expand("asn/messages",
+				fn := repos.Join(user.expand("asn/messages",
 					blobFN))
 				reposLN(sumFN, fn)
 				links[i+o] = NewPDUFN(fn)
@@ -510,10 +510,16 @@ func (repos *Repos) mkMessageLinks(blob *Blob, sum *Sum, sumFN string) []*PDU {
 	}
 }
 
-// File remove blob and unlink it's referenced blobs
-func (repos *Repos) mkRemovalLinks(blob *Blob, sum *Sum, sumFN string) []*PDU {
-	// FIXME
-	return nil
+// mkRemoveLinks files (both the distributes sum file and local derived file)
+func (repos *Repos) mkRemoveLinks(blob *Blob, sum *Sum, sumFN string) []*PDU {
+	blobFN := blob.FN(sum.String())
+	author := repos.searchOrNewUser(&blob.Author)
+	authorFN := repos.Join(author.expand("asn/removals", blobFN))
+	reposLN(sumFN, authorFN)
+	return []*PDU{
+		NewPDUFN(sumFN),
+		NewPDUFN(authorFN),
+	}
 }
 
 func (repos *Repos) Free() {
@@ -526,12 +532,12 @@ func (repos *Repos) Free() {
 	repos.Users = nil
 }
 
-func (repos *Repos) join(elements ...string) string {
+func (repos *Repos) Join(elements ...string) string {
 	return repos.DN + reposPS + filepath.Join(elements...)
 }
 
 func (repos *Repos) newTmp() {
-	tmpDN := repos.join("tmp")
+	tmpDN := repos.Join("tmp")
 	x, err := ioutil.ReadDir(tmpDN)
 	if err == nil {
 		// flush hanging tmp files
@@ -621,7 +627,7 @@ func (repos *Repos) newUsers() {
 	}
 	for _, fi := range topdir {
 		if fi.IsDir() && len(fi.Name()) == reposTopSz {
-			subdn := repos.join(fi.Name())
+			subdn := repos.Join(fi.Name())
 			if subdir, err = ioutil.ReadDir(subdn); err != nil {
 				panic(err)
 			}
@@ -686,7 +692,7 @@ func (repos *Repos) Search(x string) (match string, err error) {
 	topdn := reposTopDN(x)
 	subdfn := reposSubDFN(x)
 	lensubdfn := len(subdfn)
-	topf, err := os.Open(repos.join(topdn))
+	topf, err := os.Open(repos.Join(topdn))
 	if err != nil {
 		return
 	}
@@ -703,7 +709,7 @@ func (repos *Repos) Search(x string) (match string, err error) {
 						err = ErrAmbiguos
 						return
 					}
-					match = repos.join(topdn, name)
+					match = repos.Join(topdn, name)
 				}
 			}
 		} else {

@@ -114,10 +114,13 @@ func Main(args ...string) (err error) {
 	}
 	defer srv.repos.Free()
 	if len(args) > 2 {
-		ses := &Ses{srv: srv}
+		// local server command line exec
+		ses := NewSes()
+		ses.srv = srv
+		ses.ASN.Repos = srv.repos
 		ses.Keys.Client.Login = *srv.Config.Keys.Admin.Pub.Encr
 		ses.asnsrv = true
-		v := ses.Exec(Stdin, args[2:]...)
+		v := ses.Exec(asn.Requester{}, Stdin, args[2:]...)
 		err, _ = v.(error)
 		asn.AckOut(Stdout, v)
 		v = nil
