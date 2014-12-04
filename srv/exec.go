@@ -23,7 +23,7 @@ import (
 const (
 	BlobArg = `<FILE|SHA|USER[@EPOCH]|[USER]@EPOCH|[USER/]NAME[@EPOCH]>`
 
-	UsageApprove = `approve SUM...`
+	UsageApprove = `approve ` + BlobArg + `...`
 	UsageAuth    = `auth [-u USER] AUTH`
 	UsageBlob    = `blob <USER|[USER/]NAME> - CONTENT`
 	UsageCat     = `cat ` + BlobArg + `...`
@@ -175,7 +175,35 @@ func (ses *Ses) Exec(req asn.Requester, r io.Reader,
 }
 
 func (ses *Ses) ExecApprove(args ...string) interface{} {
-	return ses.Summer(ErrUsageApprove, "asn/approvals/", args...)
+	if len(args) < 1 {
+		return ErrUsageApprove
+	}
+	author := ses.srv.repos.Users.Search(&ses.Keys.Client.Login)
+	owner := author
+	defer func() {
+		author = nil
+		owner = nil
+	}()
+	sums := make(asn.Sums, 0)
+	defer func() { sums = nil }()
+	err := ses.Blobber(func(fn string) error {
+		// Permission to remove is checked in blob.Proc()
+		f, err := os.Open(fn)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		sums = append(sums, *asn.NewSumOf(f))
+		return nil
+	}, args...)
+	if err != nil {
+		return err
+	}
+	sum, err := ses.NewBlob(owner, author, "asn/approvals/", sums)
+	if err != nil {
+		return err
+	}
+	return sum
 }
 
 func (ses *Ses) ExecAuth(args ...string) interface{} {
@@ -744,38 +772,6 @@ func (ses *Ses) NewBlob(owner, author *asn.ReposUser, name string,
 	ses.dist(links)
 	links = nil
 	return
-}
-
-func (ses *Ses) Summer(errusage error, name string, args ...string) interface{} {
-	if len(args) < 1 {
-		return errusage
-	}
-	author := ses.srv.repos.Users.Search(&ses.Keys.Client.Login)
-	owner := author
-	defer func() {
-		author = nil
-		owner = nil
-	}()
-	sums := make(asn.Sums, 0)
-	defer func() { sums = nil }()
-	err := ses.Blobber(func(fn string) error {
-		// Permission to remove is checked in blob.Proc()
-		f, err := os.Open(fn)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		sums = append(sums, *asn.NewSumOf(f))
-		return nil
-	}, args...)
-	if err != nil {
-		return err
-	}
-	sum, err := ses.NewBlob(owner, author, name, sums)
-	if err != nil {
-		return err
-	}
-	return sum
 }
 
 // StripEpoch removes '@NANO' argument suffixes

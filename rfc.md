@@ -305,12 +305,12 @@ the Unix epoch (00:00:00.000000 Jan 1, 1970)
 LATITUDE and LONGITUDE are UTF-8 decimal encoding of floating point degrees.
 
 ### approve ###
-    approve SUM...
+    approve BLOB...
 
 A moderator's device may exec this command in the `established` state for the
-server to create, process, and distribute a blob named `asn/approvals/SUM`
-with the expanded SUM arguments as described in the [permission](#permission)
-section.
+server to create, process, and distribute a blob named `asn/approvals/` with
+blob arguments of abbreviated SUM or USER/asn/messages/DERIVED as described in
+the [permission](#permission) section.
 
 ### auth ###
     auth [-u USER] AUTH
@@ -542,7 +542,7 @@ The `asn/author` and `asn/editors` may assign one or more (including
 themselves) as forum and bridge moderators by adding their keys to the blob
 named `asn/moderators`.  Forum or bridge messages are added to the moderators'
 message list. Any moderator may then exec the `approve` command for the server
-to create, process and distribute an `asn/approvals/SUM` blob that results in
+to create, process and distribute an `asn/approvals/` blob that results in
 the listed blobs being linked to the forums message list and sent to any
 subscriber sessions.
 
@@ -567,8 +567,8 @@ A session receives newly added blobs if:
 A `message` is an empty named blob (e.g. `namelen` == 0) and App specific
 CONTENT.  The server makes these links to message blobs.
 
-    OWNER/asn/messages/SUM
-    AUTHOR/asn/messages/SUM
+    OWNER/asn/messages/DERIVED
+    AUTHOR/asn/messages/DERIVED
 
 ### Authentication ###
 The LOGIN user may contribute to the ASN web-of-trust by vouching for or
@@ -638,13 +638,18 @@ Empty name objects are messages with links named by the blob's abbreviated,
 hexadecimal SHA sum.
 
     NAME = ""
-    LINK = OWNER[:2]/OWNER[2:]/asn/messages/SUM[:64]
+    LINK = OWNER[:2]/OWNER[2:]/asn/messages/DERIVED
 
 Similarly, any blob named with a trailing forward slash ("/") is linked with
 its sum.
 
     NAME = "whatever/"
-    OWNER[:2]/OWNER[2:64]/whatever/SUM[:64]
+    OWNER[:2]/OWNER[2:64]/whatever/DERIVED
+
+The DERIVED name is this contenation of the hexadecimal creation time and the
+abbreviated SUM.
+
+    DERIVED = EPOCH "_" SUM[:16]
 
 ## Server Affinity ##
 Before login, the App consults a proprietary table to connect with the server
