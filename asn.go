@@ -5,7 +5,6 @@
 package asn
 
 import (
-	"bytes"
 	"errors"
 	"io"
 	"net"
@@ -71,6 +70,8 @@ type ASN struct {
 	txBlack, txRed []byte
 	// Repository
 	Repos *Repos
+	// Ack handler map
+	Acker acker
 }
 
 // Flush ASN pool.
@@ -100,6 +101,7 @@ func NewASN() (asn *ASN) {
 			txBlack: make([]byte, 0, MaxSegSz),
 			txRed:   make([]byte, 0, MaxSegSz),
 		}
+		asn.Acker.Init()
 	}
 	return
 }
@@ -116,6 +118,7 @@ func (asn *ASN) del() {
 	asn.rxRed = nil
 	asn.txBlack = nil
 	asn.txRed = nil
+	asn.Acker.Free()
 }
 
 // Free the ASN back to pool or release it to GC if full.
@@ -154,118 +157,6 @@ flush: // flush queues
 	}
 	asn = nil
 }
-
-// Ack the given requester. If the argument is an error, the associate code is
-// used in the negative reply with the error string. Otherwise, it's a
-// successful Ack with any subsequent args appended as data.
-func (asn *ASN) Ack(req Requester, argv ...interface{}) {
-	var (
-		err error
-		pdu *PDU
-	)
-	if len(argv) == 1 {
-		switch t := argv[0].(type) {
-		case *PDU:
-			asn.Tx(t)
-			return
-		case error:
-			err = t
-			argv = argv[1:]
-		case nil:
-			argv = argv[1:]
-		}
-	}
-	if len(argv) == 0 {
-		pdu = NewPDUBuf()
-	} else {
-		f, err := asn.Repos.Tmp.NewFile()
-		if err != nil {
-			panic("create tmp ack file: " + err.Error())
-		}
-		pdu = NewPDUFile(f)
-		f = nil
-	}
-	v := asn.version
-	v.WriteTo(pdu)
-	AckReqId.Version(v).WriteTo(pdu)
-	req.WriteTo(pdu)
-	if err != nil {
-		Trace(asn.Name, "Tx", AckReqId, req, err)
-		ErrFromError(err).Version(v).WriteTo(pdu)
-		if len(argv) > 0 {
-			AckOut(pdu, argv...)
-		} else {
-			pdu.Write([]byte(err.Error()))
-		}
-	} else {
-		Trace(asn.Name, "Tx", AckReqId, req, Success)
-		Success.Version(v).WriteTo(pdu)
-		AckOut(pdu, argv...)
-	}
-	asn.Tx(pdu)
-}
-
-// AckOut is used by the above asn.Ack to write Ack content to the given
-// writer. It is also used by asnsrv to print Ack content to Stdout.
-func AckOut(w io.Writer, argv ...interface{}) {
-	for _, v := range argv {
-		switch t := v.(type) {
-		case *PDU:
-			if err := t.Open(); err == nil {
-				var (
-					v   Version
-					id  Id
-					req Requester
-					ec  Err
-				)
-				v.ReadFrom(t)
-				id.ReadFrom(t)
-				req.ReadFrom(t)
-				ec.ReadFrom(t)
-				if ec != Success {
-					w.Write([]byte("Error: "))
-				}
-				t.WriteTo(w)
-			}
-			t.Free()
-		case *bytes.Buffer:
-			t.WriteTo(w)
-		case []byte:
-			w.Write(t)
-		case string:
-			w.Write([]byte(t))
-		case func(io.Writer):
-			t(w)
-		case []*os.File:
-			for i, f := range t {
-				io.Copy(w, f)
-				f.Close()
-				t[i] = nil
-			}
-		case *Sum:
-			w.Write([]byte(t.String()))
-			w.Write([]byte("\n"))
-		}
-	}
-}
-
-// NewAckSuccessPDUFile creates a temp file preloaded with the asn success ack
-// header and ready to write success data.
-func (asn *ASN) NewAckSuccessPDUFile(req Requester) (pdu *PDU, err error) {
-	f, err := asn.Repos.Tmp.NewFile()
-	if err != nil {
-		return
-	}
-	pdu = NewPDUFile(f)
-	f = nil
-	v := asn.version
-	v.WriteTo(pdu)
-	AckReqId.Version(v).WriteTo(pdu)
-	req.WriteTo(pdu)
-	Success.Version(v).WriteTo(pdu)
-	return
-}
-
 func (asn *ASN) Conn() net.Conn      { return asn.conn }
 func (asn *ASN) IsOpened() bool      { return asn.state == opened }
 func (asn *ASN) IsProvisional() bool { return asn.state == provisional }

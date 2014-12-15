@@ -34,7 +34,7 @@ var (
 
 func init() { BlobPool = make(chan *Blob, 16) }
 
-func BlobFilter(fn string, epoch time.Time,
+func BlobFilter(fn string, after time.Time,
 	f func(fn string) error) (err error) {
 	fi, err := os.Stat(fn)
 	if err != nil {
@@ -44,13 +44,13 @@ func BlobFilter(fn string, epoch time.Time,
 		filepath.Walk(fn,
 			func(wn string, info os.FileInfo, err error) error {
 				if err == nil && !info.IsDir() &&
-					(epoch.IsZero() ||
-						BlobTime(wn).After(epoch)) {
+					(after.IsZero() ||
+						BlobTime(wn).After(after)) {
 					err = f(wn)
 				}
 				return err
 			})
-	} else if epoch.IsZero() || BlobTime(fn).After(epoch) {
+	} else if after.IsZero() || BlobTime(fn).After(after) {
 		err = f(fn)
 	}
 	return
@@ -245,6 +245,8 @@ func (blob *Blob) SummingWriteContentsTo(w io.Writer, v interface{}) (sum *Sum,
 		if err == nil {
 			sum = new(Sum)
 			copy(sum[:], h.Sum([]byte{}))
+		} else {
+			Diag.Println(err)
 		}
 		h.Reset()
 		h = nil

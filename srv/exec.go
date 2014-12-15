@@ -5,12 +5,11 @@
 package srv
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/apptimistco/asn"
-	"gopkg.in/yaml.v1"
 	"io"
 	"io/ioutil"
 	"os"
@@ -18,24 +17,26 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/apptimistco/asn"
+	"gopkg.in/yaml.v1"
 )
 
 const (
-	BlobArg = `<FILE|SHA|USER[@EPOCH]|[USER]@EPOCH|[USER/]NAME[@EPOCH]>`
-
-	UsageApprove = `approve ` + BlobArg + `...`
+	UsageApprove = `approve BLOB...`
 	UsageAuth    = `auth [-u USER] AUTH`
 	UsageBlob    = `blob <USER|[USER/]NAME> - CONTENT`
-	UsageCat     = `cat ` + BlobArg + `...`
-	UsageClone   = `clone [URL|MIRROR][@EPOCH]`
+	UsageCat     = `cat BLOB...`
+	UsageClone   = `clone [NAME][@TIME]`
 	UsageEcho    = `echo [STRING]...`
-	UsageFetch   = `fetch ` + BlobArg + `...`
-	UsageGC      = `gc [-v|--verbose] [-n|--dry-run] [@EPOCH]`
-	UsageLS      = `ls ` + BlobArg + `...`
-	UsageMark    = `mark [-u USER] <LATITUDE LONGITUDE>|<7?PLACE>`
+	UsageFetch   = `fetch BLOB...`
+	UsageGC      = `gc [-v|--verbose] [-n|--dry-run] [@TIME]`
+	UsageIam     = `iam NAME`
+	UsageLS      = `ls [BLOB...]`
+	UsageMark    = `mark [-u USER] [LATITUDE LONGITUDE | 7?PLACE]`
 	UsageNewUser = `newuser <"actual"|"bridge"|"forum"|"place">`
-	UsageObjDump = `objdump ` + BlobArg + `...`
-	UsageRM      = `rm ` + BlobArg + `...`
+	UsageObjDump = `objdump BLOB...`
+	UsageRM      = `rm BLOB...`
 	UsageTrace   = `trace [COMMAND [ARG]]`
 	UsageUsers   = `users`
 	UsageVouch   = `vouch USER SIG`
@@ -60,6 +61,9 @@ const (
     ` + UsageGC + `
 	Before acknowledgement the server purges older or all blobs
 	flagged for deletion.
+    ` + UsageIam + `
+        Show NAME instead of LOGIN key in list of Who.
+	Used by servers in indirect clone request.
     ` + UsageLS + `
 	Returns list of matching blobs.
     ` + UsageMark + `
@@ -77,7 +81,12 @@ const (
     ` + UsageVouch + `
 	Vouch for or deny USER's identity.
     ` + UsageWho + `
-	List logged in users.
+	List logged in user names, if set, or login key.
+
+Where BLOB may be any of the following.
+	-
+	'$'<'*' | SUM>[@TIME]
+	['~'['*' | '.' | USER]][GLOB][@TIME]
 `
 )
 
@@ -90,6 +99,7 @@ var (
 	ErrUsageEcho    = errors.New("usage: " + UsageEcho)
 	ErrUsageFetch   = errors.New("usage: " + UsageFetch)
 	ErrUsageGC      = errors.New("usage: " + UsageGC)
+	ErrUsageIam     = errors.New("usage: " + UsageIam)
 	ErrUsageLS      = errors.New("usage: " + UsageLS)
 	ErrUsageMark    = errors.New("usage: " + UsageMark)
 	ErrUsageNewUser = errors.New("usage: " + UsageNewUser)
@@ -104,29 +114,32 @@ var (
 )
 
 func (ses *Ses) RxExec(pdu *asn.PDU) error {
-	var req asn.Requester
-	var cmd [256]byte
-	const sep = "-\x00"
+	var (
+		req  asn.Requester
+		cmd  [256]byte
+		args []string
+	)
+	const demarcation = "\x00\x00"
 	req.ReadFrom(pdu)
 	n, err := pdu.Read(cmd[:])
 	if err != nil {
 		return err
 	}
-	l, sepi := n, bytes.Index(cmd[:n], []byte(sep))
-	if sepi > 0 {
-		l = sepi
+	if i := bytes.Index(cmd[:n], []byte(demarcation)); i > 0 {
+		args = strings.Split(string(cmd[:i+1]), "\x00")
+		pdu.Rseek(int64((i-n)+len(demarcation)), os.SEEK_CUR)
+	} else {
+		args = strings.Split(string(cmd[:n]), "\x00")
 	}
-	args := strings.Split(string(cmd[:l]), "\x00")
 	ses.ASN.Println("exec", strings.Join(args, " "))
-	if sepi > 0 {
-		pdu.Rseek(int64((l-n)+len(sep)), os.SEEK_CUR)
-	}
+	asn.Diag.Printf("%p\n", pdu)
 	go ses.GoExec(req, pdu, args...)
 	return nil
 }
 
 func (ses *Ses) GoExec(req asn.Requester, pdu *asn.PDU, args ...string) {
 	ses.ASN.Ack(req, ses.Exec(req, pdu, args...))
+	pdu.Free()
 }
 
 func (ses *Ses) Exec(req asn.Requester, r io.Reader,
@@ -135,31 +148,33 @@ func (ses *Ses) Exec(req asn.Requester, r io.Reader,
 	case "exec-help", "help":
 		return HelpExec
 	case "approve":
-		return ses.ExecApprove(args[1:]...)
+		return ses.ExecApprove(r, args[1:]...)
 	case "auth":
 		return ses.ExecAuth(args[1:]...)
 	case "blob":
 		return ses.ExecBlob(r, args[1:]...)
 	case "cat":
-		return ses.ExecCat(req, args[1:]...)
+		return ses.ExecCat(req, r, args[1:]...)
 	case "clone":
 		return ses.ExecClone(args[1:]...)
 	case "echo":
 		return strings.Join(args[1:], " ") + "\n"
 	case "fetch":
-		return ses.ExecFetch(args[1:]...)
+		return ses.ExecFetch(r, args[1:]...)
 	case "gc":
 		return ses.ExecGC(req, args[1:]...)
+	case "iam":
+		return ses.ExecIam(args[1:]...)
 	case "ls":
-		return ses.ExecLS(req, args[1:]...)
+		return ses.ExecLS(req, r, args[1:]...)
 	case "mark":
 		return ses.ExecMark(args[1:]...)
 	case "newuser":
 		return ses.ExecNewUser(args[1:]...)
 	case "objdump":
-		return ses.ExecObjDump(args[1:]...)
+		return ses.ExecObjDump(r, args[1:]...)
 	case "rm":
-		return ses.ExecRM(args[1:]...)
+		return ses.ExecRM(r, args[1:]...)
 	case "trace":
 		return ses.ExecTrace(args[1:]...)
 	case "users":
@@ -167,14 +182,13 @@ func (ses *Ses) Exec(req asn.Requester, r io.Reader,
 	case "vouch":
 		return ses.ExecVouch(args[1:]...)
 	case "who":
-		return ses.ExecWho(args[1:]...)
+		return ses.ExecWho(req, args[1:]...)
 	default:
-		return errors.New("unknown exec command: " + args[0] + "\n" +
-			HelpExec)
+		return errors.New("unknown exec command: " + args[0])
 	}
 }
 
-func (ses *Ses) ExecApprove(args ...string) interface{} {
+func (ses *Ses) ExecApprove(r io.Reader, args ...string) interface{} {
 	if len(args) < 1 {
 		return ErrUsageApprove
 	}
@@ -195,15 +209,11 @@ func (ses *Ses) ExecApprove(args ...string) interface{} {
 		defer f.Close()
 		sums = append(sums, *asn.NewSumOf(f))
 		return nil
-	}, args...)
+	}, r, args...)
 	if err != nil {
 		return err
 	}
-	sum, err := ses.NewBlob(owner, author, "asn/approvals/", sums)
-	if err != nil {
-		return err
-	}
-	return sum
+	return ses.NewBlob(owner, author, "asn/approvals/", sums)
 }
 
 func (ses *Ses) ExecAuth(args ...string) interface{} {
@@ -233,11 +243,7 @@ func (ses *Ses) ExecAuth(args ...string) interface{} {
 	if len(authPub) != asn.AuthPubSz {
 		return os.ErrInvalid
 	}
-	sum, err := ses.NewBlob(owner, author, "asn/auth", authPub)
-	if err != nil {
-		return err
-	}
-	return sum
+	return ses.NewBlob(owner, author, "asn/auth", authPub)
 }
 
 func (ses *Ses) ExecBlob(r io.Reader, args ...string) interface{} {
@@ -247,31 +253,34 @@ func (ses *Ses) ExecBlob(r io.Reader, args ...string) interface{} {
 		author = nil
 		owner = nil
 	}()
-	if len(args) != 1 {
+	if len(args) < 2 {
 		return ErrUsageBlob
 	}
 	name := args[0]
-	slash := strings.Index(args[0], "/")
-	if asn.IsHex(args[0]) || (slash > 0 && asn.IsHex(name[:slash])) {
+	if args[0][0] == '~' {
+		slash := strings.Index(args[0][1:], "/")
 		if slash < 0 {
 			slash = len(name)
 			name = ""
 		} else {
-			name = name[slash+1:]
+			name = args[0][slash+1:]
 		}
-		owner = ses.srv.repos.Users.Search(args[0][:slash])
+		owner = ses.srv.repos.Users.Search(args[0][1:slash])
 		if owner == nil {
 			return asn.ErrNOENT
 		}
 	}
-	sum, err := ses.NewBlob(owner, author, name, r)
-	if err != nil {
-		return err
+	if args[1] == "-" {
+		asn.Diag.Printf("%T\n", r)
+		return ses.NewBlob(owner, author, name, r)
+	} else {
+		return ses.NewBlob(owner, author, name,
+			strings.Join(args[1:], " "))
 	}
-	return sum
 }
 
-func (ses *Ses) ExecCat(req asn.Requester, args ...string) interface{} {
+func (ses *Ses) ExecCat(req asn.Requester,
+	r io.Reader, args ...string) interface{} {
 	if len(args) == 0 {
 		return ErrUsageCat
 	}
@@ -290,7 +299,7 @@ func (ses *Ses) ExecCat(req asn.Requester, args ...string) interface{} {
 		}
 		ack.ReadFrom(f)
 		return nil
-	}, args...)
+	}, r, args...)
 	if err != nil {
 		ack.Free()
 		ack = nil
@@ -300,10 +309,12 @@ func (ses *Ses) ExecCat(req asn.Requester, args ...string) interface{} {
 }
 
 func (ses *Ses) ExecClone(args ...string) interface{} {
+	if ses.asnsrv {
+		return ErrCantExec
+	}
 	var (
 		err   error
-		epoch time.Time
-		arg   string
+		after time.Time
 
 		dir, subdir []os.FileInfo
 	)
@@ -312,14 +323,11 @@ func (ses *Ses) ExecClone(args ...string) interface{} {
 	if nargs > 1 {
 		return ErrUsageClone
 	} else if nargs == 1 {
-		epoch, arg = StripEpoch(args[0])
-	}
-	if ses.asnsrv {
-		return ErrCantExec
-	}
-	if len(arg) > 0 {
-		// remote clone
-		return ErrFIXME
+		var name string
+		after, name = StripTime(args[0])
+		if name != "" {
+			return ses.execCloneRemote(after, name)
+		}
 	}
 	if dir, err = ioutil.ReadDir(ses.srv.Config.Dir); err != nil {
 		return err
@@ -335,7 +343,7 @@ func (ses *Ses) ExecClone(args ...string) interface{} {
 				fn := filepath.Join(subdn, fi.Name())
 				if !fi.IsDir() && len(fi.Name()) == fnlen {
 					bt := asn.BlobTime(fn)
-					if epoch.IsZero() || bt.After(epoch) {
+					if after.IsZero() || bt.After(after) {
 						ses.ASN.Tx(asn.NewPDUFN(fn))
 					}
 				}
@@ -346,7 +354,64 @@ func (ses *Ses) ExecClone(args ...string) interface{} {
 	return nil
 }
 
-func (ses *Ses) ExecFetch(args ...string) interface{} {
+func (ses *Ses) execCloneRemote(after time.Time, name string) interface{} {
+	var remote *Ses
+	ses.srv.ForEachSession(func(x *Ses) {
+		if x.name == name {
+			remote = x
+		}
+	})
+	if remote == nil {
+		return errors.New("no remote session for " + name)
+	}
+	ls := asn.NewPDUBuf()
+	v := ses.ASN.Version()
+	v.WriteTo(ls)
+	asn.ExecReqId.Version(v).WriteTo(ls)
+	req := asn.NextRequester()
+	req.WriteTo(ls)
+	if after.IsZero() {
+		fmt.Fprint(ls, "ls\x00~*")
+	} else {
+		fmt.Fprintf(ls, "ls\x00~*@%d", after.UnixNano())
+	}
+	ses.ASN.Acker.Map(req, remote.execCloneLsAck)
+	remote.ASN.Tx(ls)
+	return nil
+}
+
+func (ses *Ses) execCloneLsAck(req asn.Requester, ack *asn.PDU) (err error) {
+	ses.ASN.Acker.UnMap(req)
+	if err = ses.ASN.ParseAckError(ack); err != nil {
+		return
+	}
+	tmp, err := ses.ASN.Repos.Tmp.NewFile()
+	if err != nil {
+		return
+	}
+	fetch := asn.NewPDUFile(tmp)
+	v := ses.ASN.Version()
+	v.WriteTo(fetch)
+	asn.ExecReqId.Version(v).WriteTo(fetch)
+	req = asn.NextRequester()
+	req.WriteTo(fetch)
+	fmt.Fprintf(fetch, "fetch\x00-\x00")
+	scanner := bufio.NewScanner(ack)
+	for scanner.Scan() {
+		fmt.Fprintln(fetch, scanner.Text())
+	}
+	scanner = nil
+	ses.ASN.Acker.Map(req, ses.execCloneFetchAck)
+	ses.ASN.Tx(fetch)
+	return nil
+}
+
+func (ses *Ses) execCloneFetchAck(req asn.Requester, ack *asn.PDU) error {
+	ses.ASN.Acker.UnMap(req)
+	return ses.ASN.ParseAckError(ack)
+}
+
+func (ses *Ses) ExecFetch(r io.Reader, args ...string) interface{} {
 	var err error
 	if len(args) < 1 {
 		return ErrUsageFetch
@@ -357,14 +422,14 @@ func (ses *Ses) ExecFetch(args ...string) interface{} {
 	err = ses.Blobber(func(fn string) error {
 		ses.ASN.Tx(asn.NewPDUFN(fn))
 		return nil
-	}, args...)
+	}, r, args...)
 	return err
 }
 
 func (ses *Ses) ExecGC(req asn.Requester, args ...string) interface{} {
 	var (
 		err     error
-		epoch   time.Time
+		after   time.Time
 		verbose bool
 		dryrun  bool
 		ack     *asn.PDU
@@ -375,7 +440,7 @@ func (ses *Ses) ExecGC(req asn.Requester, args ...string) interface{} {
 		} else if arg == "-n" || arg == "--dry-run" {
 			dryrun = true
 		} else if strings.HasPrefix(arg, "@") {
-			epoch, _ = StripEpoch(arg)
+			after, _ = StripTime(arg)
 		} else {
 			return ErrUsageGC
 		}
@@ -386,7 +451,7 @@ func (ses *Ses) ExecGC(req asn.Requester, args ...string) interface{} {
 			return err
 		}
 	}
-	err = ses.srv.repos.Filter(epoch, func(fn string) error {
+	err = ses.srv.repos.Filter(after, func(fn string) error {
 		var st syscall.Stat_t
 		if err := syscall.Stat(fn, &st); err != nil {
 			return err
@@ -411,23 +476,27 @@ func (ses *Ses) ExecGC(req asn.Requester, args ...string) interface{} {
 	return ack
 }
 
-func (ses *Ses) ExecLS(req asn.Requester, args ...string) interface{} {
+func (ses *Ses) ExecIam(args ...string) interface{} {
+	if len(args) != 1 {
+		return ErrUsageIam
+	}
+	ses.name = args[0]
+	return nil
+}
+
+func (ses *Ses) ExecLS(req asn.Requester,
+	r io.Reader, args ...string) interface{} {
 	ack, err := ses.ASN.NewAckSuccessPDUFile(req)
 	if err != nil {
 		return err
 	}
 	slogin := ses.Keys.Client.Login.String()
 	err = ses.Blobber(func(fn string) error {
-		usersum, path := ses.srv.repos.ParsePath(fn)
-		if usersum != slogin {
-			fmt.Fprint(ack, usersum[:16])
-			if path != "" {
-				fmt.Fprint(ack, "/")
-			}
+		if ref := ses.srv.repos.FN2Ref(slogin, fn); ref != "" {
+			fmt.Fprintln(ack, ref)
 		}
-		fmt.Fprintln(ack, path)
 		return nil
-	}, args...)
+	}, r, args...)
 	if err != nil {
 		ack.Free()
 		ack = nil
@@ -473,13 +542,22 @@ func (ses *Ses) ExecMark(args ...string) interface{} {
 			return err
 		}
 	} else {
-		return ErrUsageMark
+		syscall.Unlink(ses.srv.repos.Expand(owner.String, "asn/mark"))
+		syscall.Unlink(ses.srv.repos.Expand(owner.String,
+			"asn/mark-server"))
+		owner.ASN.MarkServer = ""
+		return nil
 	}
-	sum, err := ses.NewBlob(owner, author, "asn/mark", m)
-	if err != nil {
+	v := ses.NewBlob(owner, author, "asn/mark", m)
+	if err, _ := v.(error); err != nil {
 		return err
 	}
-	return sum
+	if owner.ASN.User != "actual" || owner.ASN.User != "" {
+		ses.NewBlob(owner, author, "asn/mark-server",
+			ses.srv.Config.Name)
+	}
+	owner.ASN.MarkServer = ses.srv.Config.Name
+	return v
 }
 
 func (ses *Ses) ExecNewUser(args ...string) interface{} {
@@ -508,19 +586,18 @@ func (ses *Ses) ExecNewUser(args ...string) interface{} {
 	if err != nil {
 		return err
 	}
-	_, err = ses.NewBlob(owner, author, "asn/auth", []byte(q.Pub.Auth[:]))
-	if err != nil {
+	v := ses.NewBlob(owner, author, "asn/auth", []byte(q.Pub.Auth[:]))
+	if err, _ := v.(error); err != nil {
 		return err
 	}
-	_, err = ses.NewBlob(owner, author, "asn/author",
-		[]byte(author.Key[:]))
-	if err != nil {
+	v = ses.NewBlob(owner, author, "asn/author", []byte(author.Key[:]))
+	if err, _ := v.(error); err != nil {
 		return err
 	}
 	return out
 }
 
-func (ses *Ses) ExecObjDump(args ...string) interface{} {
+func (ses *Ses) ExecObjDump(r io.Reader, args ...string) interface{} {
 	out := &bytes.Buffer{}
 	if len(args) < 1 {
 		return ErrUsageObjDump
@@ -544,7 +621,7 @@ func (ses *Ses) ExecObjDump(args ...string) interface{} {
 		fmt.Fprintln(out, "owner:", blob.Owner.String())
 		fmt.Fprintln(out, "author:", blob.Author.String())
 		fmt.Fprintln(out, "time:", blob.RFC822Z())
-		fmt.Fprintln(out, "epoch:", blob.Time.UnixNano())
+		fmt.Fprintln(out, "unix nano:", blob.Time.UnixNano())
 		fmt.Fprintln(out, "size:", fi.Size())
 		fmt.Fprintln(out, "len:", fi.Size()-pos)
 		switch blob.Name {
@@ -576,7 +653,7 @@ func (ses *Ses) ExecObjDump(args ...string) interface{} {
 			fmt.Fprintln(out)
 		}
 		return nil
-	}, args...)
+	}, r, args...)
 	if err != nil {
 		out = nil
 		return err
@@ -586,7 +663,7 @@ func (ses *Ses) ExecObjDump(args ...string) interface{} {
 	return b
 }
 
-func (ses *Ses) ExecRM(args ...string) interface{} {
+func (ses *Ses) ExecRM(r io.Reader, args ...string) interface{} {
 	buf := &bytes.Buffer{}
 	author := ses.srv.repos.Users.Search(&ses.Keys.Client.Login)
 	owner := author
@@ -601,15 +678,11 @@ func (ses *Ses) ExecRM(args ...string) interface{} {
 	err := ses.Blobber(func(fn string) error {
 		fmt.Fprintln(buf, ses.srv.repos.DePrefix(fn))
 		return nil
-	}, args...)
+	}, r, args...)
 	if err != nil {
 		return err
 	}
-	sum, err := ses.NewBlob(owner, author, "asn/removals/", buf)
-	if err != nil {
-		return err
-	}
-	return sum
+	return ses.NewBlob(owner, author, "asn/removals/", buf)
 }
 
 func (ses *Ses) ExecTrace(args ...string) interface{} {
@@ -655,98 +728,123 @@ func (ses *Ses) ExecVouch(args ...string) interface{} {
 	if len(sig) != asn.AuthSigSz {
 		return os.ErrInvalid
 	}
-
-	sum, err := ses.NewBlob(owner, author, "asn/vouchers/", sig)
-	if err != nil {
-		return err
-	}
-	return sum
+	return ses.NewBlob(owner, author, "asn/vouchers/", sig)
 }
 
-func (ses *Ses) ExecWho(args ...string) interface{} {
+func (ses *Ses) ExecWho(req asn.Requester, args ...string) interface{} {
 	if len(args) != 0 {
 		return ErrUsageWho
 	}
-	return ErrFIXME
+	ack, err := ses.ASN.NewAckSuccessPDUFile(req)
+	if err != nil {
+		return err
+	}
+	ses.srv.ForEachSession(func(x *Ses) {
+		if x.name != "" {
+			fmt.Fprintln(ack, x.name)
+		} else {
+			fmt.Fprintln(ack, x.Keys.Client.Login.String()[:16])
+		}
+	})
+	return ack
 }
 
-func (ses *Ses) Blobber(f func(fn string) error, args ...string) error {
+func (ses *Ses) Blobber(f func(fn string) error, r io.Reader,
+	args ...string) (err error) {
+	repos := ses.srv.repos
+	config := ses.srv.Config
+	login := repos.Users.Search(&ses.Keys.Client.Login)
 	var (
-		epoch time.Time
-		user  *asn.ReposUser
+		after     time.Time
+		glob      string
+		mustExist bool
 	)
-	login := ses.srv.repos.Users.Search(&ses.Keys.Client.Login)
-	server := ses.srv.Config.Keys.Server.Pub.Encr.String()
-	defer func() {
-		user = nil
-		login = nil
-	}()
+	uf := func(u *asn.ReposUser) error {
+		if u == nil {
+			return asn.ErrNOENT
+		}
+		xn := repos.Expand(u.String, glob)
+		matches, err := filepath.Glob(xn)
+		if err != nil {
+			return err
+		}
+		if len(matches) == 0 && mustExist {
+			return os.ErrNotExist
+		}
+		for _, match := range matches {
+			if err = asn.BlobFilter(match, after, f); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	if len(args) == 0 {
 		args = []string{""}
 	}
-argLoop:
 	for _, arg := range args {
-		user = login
-		epoch, arg = StripEpoch(arg)
-		if _, err := os.Stat(arg); err == nil { // DIR or FILE
-			asn.BlobFilter(arg, epoch, f)
-			continue argLoop
-		} else if asn.IsHex(arg) { // USER or SHA
-			if strings.HasPrefix(server, arg) { // SERVER
-				// list all blobs newer than epoch
-				ses.srv.repos.Filter(epoch, f)
-				continue argLoop
-			}
-			user = ses.srv.repos.Users.Search(arg)
-			if user != nil {
-				arg = ""
-			} else if match, err :=
-				ses.srv.repos.Search(arg); err != nil {
-				return err
-			} else if match == "" {
-				return asn.ErrNOENT
-			} else { // SHA
-				asn.BlobFilter(match, epoch, f)
-				continue argLoop
-			}
-		} else if slash := strings.Index(arg, "/"); slash > 0 &&
-			asn.IsHex(arg[:slash]) { // USER/NAME
-			if strings.HasPrefix(server, arg[:slash]) {
-				user = nil // wildcard users
-			} else {
-				user = ses.srv.repos.Users.Search(arg[:slash])
-				if user == nil {
-					return asn.ErrNOENT
+		after, arg = StripTime(arg)
+		_, staterr := os.Stat(arg)
+		slash := strings.Index(arg, "/")
+		switch {
+		default:
+			glob, mustExist = arg, true
+			err = uf(login)
+		case arg == "", arg == "~":
+			glob, mustExist = "*", false
+			err = uf(login)
+		case arg[0:2] == "~/":
+			glob, mustExist = arg[2:], true
+			err = uf(login)
+		case arg == "-":
+			err = ses.blobberRecurse(f, r)
+		case arg == "$*":
+			err = repos.Filter(after, f)
+		case arg[0] == '$':
+			match, err := repos.Search(arg[1:])
+			if err == nil {
+				if match == "" {
+					err = asn.ErrNOENT
+				} else {
+					err = asn.BlobFilter(match, after, f)
 				}
 			}
-			arg = arg[slash+1:]
+		case arg == "~*":
+			glob, mustExist = "*", false
+			err = repos.Users.ForEachUser(uf)
+		case arg == "~.":
+			glob, mustExist = "*", false
+			err = repos.Users.ForEachUserOn(config.Name, uf)
+		case arg[0:3] == "~*/":
+			glob, mustExist = arg[3:], false
+			err = repos.Users.ForEachUser(uf)
+		case arg[0:3] == "~./":
+			glob, mustExist = arg[3:], false
+			err = repos.Users.ForEachUserOn(config.Name, uf)
+		case arg[0] == '~' && slash < 0:
+			glob, mustExist = "*", true
+			err = uf(repos.Users.Search(arg[1:]))
+		case arg[0] == '~' && slash > 0:
+			glob, mustExist = arg[slash+1:], true
+			err = uf(repos.Users.Search(arg[1:slash]))
+		case staterr == nil:
+			err = asn.BlobFilter(arg, after, f)
 		}
-		if arg == "" {
-			arg = "*"
+		if err != nil {
+			return err
 		}
-		if user != nil {
-			xn := ses.srv.repos.Expand(user.String, arg)
-			matches, err := filepath.Glob(xn)
-			if len(matches) > 0 {
-				for _, match := range matches {
-					asn.BlobFilter(match, epoch, f)
-				}
-			} else if err != nil {
+	}
+	return nil
+}
+
+// blobberRecurse reruns Blobber with reference of each input line.
+func (ses *Ses) blobberRecurse(f func(fn string) error, r io.Reader) error {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		xarg := scanner.Text()
+		if xarg != "-" { // only one level recursion
+			err := ses.Blobber(f, nil, xarg)
+			if err != nil {
 				return err
-			} else {
-				return os.ErrNotExist
-			}
-		} else {
-			for _, user := range ses.srv.repos.Users.Entry {
-				xn := ses.srv.repos.Expand(user.String, arg)
-				matches, err := filepath.Glob(xn)
-				if len(matches) > 0 {
-					for _, match := range matches {
-						asn.BlobFilter(match, epoch, f)
-					}
-				} else if err != nil {
-					return err
-				}
 			}
 		}
 	}
@@ -754,7 +852,7 @@ argLoop:
 }
 
 func (ses *Ses) NewBlob(owner, author *asn.ReposUser, name string,
-	v interface{}) (sum *asn.Sum, err error) {
+	v interface{}) interface{} {
 	blob := asn.NewBlob(owner.Key, author.Key, name)
 	defer func() {
 		blob.Free()
@@ -762,27 +860,61 @@ func (ses *Ses) NewBlob(owner, author *asn.ReposUser, name string,
 	}()
 	sum, fn, err := ses.srv.repos.File(blob, v)
 	if err != nil {
-		return
+		asn.Diag.Println(err)
+		return err
 	}
 	links, err := ses.srv.repos.MkLinks(blob, sum, fn)
 	if err != nil {
-		return
+		asn.Diag.Println(err)
+		return err
 	}
 	ses.removals(links)
 	ses.dist(links)
 	links = nil
-	return
+	return sum
 }
 
-// StripEpoch removes '@NANO' argument suffixes
-func StripEpoch(arg string) (t time.Time, argWoTime string) {
+// StripTime removes '@TIME' argument suffixes
+func StripTime(arg string) (t time.Time, argWoTime string) {
 	argWoTime = arg
 	if at := strings.Index(arg, "@"); at >= 0 {
 		var nano int64
-		isec := int64(time.Second)
-		fmt.Sscanf(arg[at+1:], "%d", &nano)
-		t = time.Unix(nano/isec, nano%isec)
 		argWoTime = arg[:at]
+		d, err := time.ParseDuration(arg[at+1:])
+		if err == nil {
+			if d > 0 {
+				d = -d
+			}
+			t = time.Now().Add(d)
+			asn.Diag.Println(t.Format(time.RFC3339))
+			return
+		}
+		n, err := fmt.Sscan(arg[at+1:], &nano)
+		if n == 1 && err == nil {
+			isec := int64(time.Second)
+			t = time.Unix(nano/isec, nano%isec)
+			asn.Diag.Println(t.Format(time.RFC3339))
+			return
+		}
+		for _, layout := range []string{
+			time.ANSIC,
+			time.RubyDate,
+			time.UnixDate,
+			time.RFC822Z,
+			time.RFC822,
+			time.RFC850,
+			time.RFC1123Z,
+			time.RFC1123,
+			time.RFC3339Nano,
+			time.RFC3339,
+		} {
+			pt, err := time.Parse(layout, arg[at+1:])
+			if err == nil {
+				t = pt
+				asn.Diag.Println(t.Format(time.RFC3339))
+				return
+			}
+		}
 	}
 	return
 }

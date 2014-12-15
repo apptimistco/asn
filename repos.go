@@ -76,6 +76,7 @@ type ReposUser struct {
 		Moderators  EncrPubList
 		Subscribers EncrPubList
 		User        string
+		MarkServer  string
 	}
 }
 
@@ -108,6 +109,28 @@ type ReposUsers struct {
 
 func (users *ReposUsers) add(user *ReposUser) {
 	users.Entry = append(users.Entry, user)
+}
+
+func (users *ReposUsers) ForEachUser(f func(entry *ReposUser) error) error {
+	users.mutex.Lock()
+	defer users.mutex.Unlock()
+	for _, entry := range users.Entry {
+		if err := f(entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (users *ReposUsers) ForEachUserOn(server string,
+	f func(*ReposUser) error) (err error) {
+	err = users.ForEachUser(func(u *ReposUser) error {
+		if u.ASN.MarkServer == server {
+			return f(u)
+		}
+		return nil
+	})
+	return
 }
 
 func (users *ReposUsers) free() {
@@ -211,6 +234,7 @@ func (repos *Repos) load(user *ReposUser) {
 	if user.ASN.User == "" {
 		user.ASN.User = "actual"
 	}
+	user.ASN.MarkServer = blobGets(repos.Join(user.expand("asn/mark-server")))
 }
 
 // File blob with v contents in repos returning file sum, name, and any error.
@@ -231,6 +255,7 @@ func (repos *Repos) File(blob *Blob, v interface{}) (sum *Sum, fn string,
 	sum, _, err = blob.SummingWriteContentsTo(tf, v)
 	tf.Close()
 	if err != nil {
+		Diag.Println(tf.Name(), err)
 		return
 	}
 	fn = repos.Expand(sum.String())
@@ -310,6 +335,42 @@ topdirloop:
 	return
 }
 
+func (repos Repos) FN2Ref(slogin, fn string) string {
+	if strings.HasPrefix(fn, repos.DN) {
+		fn = repos.DePrefix(fn)
+	}
+	if fn[reposTopSz] != os.PathSeparator {
+		return fn
+	}
+	topDN := fn[:reposTopSz]
+	fn = fn[reposTopSz+1:]
+	slash := strings.IndexByte(fn, os.PathSeparator)
+	if slash < 0 {
+		if IsHex(fn) && len(fn) > 14 {
+			sumfn := topDN + fn
+			return "$" + sumfn[:16]
+		}
+	} else if IsHex(fn[:slash]) && slash > 14 {
+		suser := topDN + fn[:slash]
+		if suser == slogin {
+			return fn[slash+1:]
+		} else {
+			return "~" + suser[:16] + "/" + fn[slash+1:]
+		}
+	}
+	return ""
+}
+
+func (repos *Repos) Free() {
+	if repos == nil {
+		return
+	}
+	repos.Tmp.free()
+	repos.Users.free()
+	repos.Tmp = nil
+	repos.Users = nil
+}
+
 // MkLinks to given REPOS/SHA file.  The first link name (unless it's a user
 // mark) is the blob sum that the calling server should distribute to its
 // mirrors. The server should send links named "asn/mark" to all users session.
@@ -324,12 +385,12 @@ func (repos *Repos) MkLinks(blob *Blob, sum *Sum, fn string) (links []*PDU,
 	}()
 	blobli := len(blob.Name) - 1
 	switch {
-	case blob.Name == "" || blob.Name == "asn/messages/" ||
+	case blob.Name == "", blob.Name == "asn/messages/",
 		blob.Name == "asn/messages":
 		links = repos.mkMessageLinks(blob, sum, fn)
-	case blob.Name == "asn/bridge" || blob.Name == "asn/bridge/":
+	case blob.Name == "asn/bridge", blob.Name == "asn/bridge/":
 		links = repos.mkBridgeLinks(blob, sum, fn)
-	case blob.Name == "asn/mark":
+	case blob.Name == "asn/mark", blob.Name == "asn/mark-server":
 		links = repos.mkMarkLinks(blob, sum, fn)
 	case blob.Name == "asn/approvals/":
 		links = repos.mkForwardLinks(blob, sum, fn)
@@ -431,21 +492,16 @@ func (repos *Repos) mkForwardLinks(blob *Blob, sum *Sum, sumFN string) []*PDU {
 	return links
 }
 
-// File mark blob by always overwriting current mark.
-// Also, don't mirror "actual" user marks.
+// File mark and mark-server blobs by always overwriting existing files,
+// removing the original SUM link, and not mirroring.
 func (repos *Repos) mkMarkLinks(blob *Blob, sum *Sum, sumFN string) []*PDU {
 	owner := repos.searchOrNewUser(&blob.Owner)
-	fn := repos.Join(owner.expand("asn/mark"))
+	fn := repos.Join(owner.expand(blob.Name))
 	syscall.Unlink(fn)
 	reposLN(sumFN, fn)
-	if owner.ASN.User == "actual" {
-		return []*PDU{
-			0: nil,
-			1: NewPDUFN(fn),
-		}
-	}
+	syscall.Unlink(sumFN)
 	return []*PDU{
-		0: NewPDUFN(sumFN),
+		0: nil,
 		1: NewPDUFN(fn),
 	}
 }
@@ -520,16 +576,6 @@ func (repos *Repos) mkRemoveLinks(blob *Blob, sum *Sum, sumFN string) []*PDU {
 		NewPDUFN(sumFN),
 		NewPDUFN(authorFN),
 	}
-}
-
-func (repos *Repos) Free() {
-	if repos == nil {
-		return
-	}
-	repos.Tmp.free()
-	repos.Users.free()
-	repos.Tmp = nil
-	repos.Users = nil
 }
 
 func (repos *Repos) Join(elements ...string) string {

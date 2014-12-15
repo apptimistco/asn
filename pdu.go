@@ -181,6 +181,7 @@ func (pdu *PDU) Read(b []byte) (int, error) {
 	} else if pdu.PB != nil {
 		return pdu.PB.Read(b)
 	}
+	Diag.Println(pdu.FN, ErrPDUInvalid)
 	return 0, ErrPDUInvalid
 }
 
@@ -201,6 +202,7 @@ func (pdu *PDU) ReadFrom(r io.Reader) (int64, error) {
 		}
 		return int64(i), err
 	}
+	Diag.Println(pdu.FN, ErrPDUInvalid)
 	return 0, ErrPDUInvalid
 }
 
@@ -260,6 +262,7 @@ func (pdu *PDU) Write(b []byte) (int, error) {
 	} else if pdu.PB != nil {
 		return pdu.PB.Write(b)
 	}
+	Diag.Println(pdu.FN, ErrPDUInvalid)
 	return 0, ErrPDUInvalid
 }
 
@@ -278,6 +281,7 @@ func (pdu *PDU) WriteTo(w io.Writer) (int64, error) {
 		pdu.PB.ro += i
 		return int64(i), err
 	}
+	Diag.Println(pdu.FN, ErrPDUInvalid)
 	return 0, ErrPDUInvalid
 }
 

@@ -75,16 +75,24 @@ func Main(args ...string) (err error) {
 	if err = adm.Connect(si); err != nil {
 		return
 	}
+	go adm.handler()
 	if err = adm.Login(); err == nil {
 		if len(args) > 0 {
 			err = adm.Exec(args...)
 		} else {
-			err = adm.Cli()
+			err = adm.cli()
 		}
 		if qerr := adm.Quit(); err == nil && qerr != nil {
 			err = qerr
 		}
+		adm.sigCh <- syscall.SIGTERM
 	}
+	if err == nil {
+		err = <-adm.doneCh
+	} else {
+		<-adm.doneCh
+	}
+	asn.Diag.Println("done")
 	adm.Close()
 	if err == io.EOF {
 		err = nil
@@ -129,7 +137,8 @@ type Adm struct {
 		pub *asn.EncrPub
 		sec *asn.EncrSec
 	}
-	sigCh chan os.Signal
+	doneCh chan error
+	sigCh  chan os.Signal
 }
 
 func (adm *Adm) AuthBlob() error {
@@ -150,10 +159,6 @@ func (adm *Adm) Blob(name string, v interface{}) (err error) {
 	}
 	f = nil
 	return
-}
-
-func (adm *Adm) Cli() error {
-	return errors.New("FIXME CLI")
 }
 
 func (adm *Adm) Close() {
@@ -194,10 +199,6 @@ func (adm *Adm) Config(s string) (err error) {
 	return
 }
 
-func (adm *Adm) DN() string {
-	return adm.config.Dir
-}
-
 // Connect to the si'th server listed in the configuration.
 func (adm *Adm) Connect(si int) (err error) {
 	var conn net.Conn
@@ -205,6 +206,7 @@ func (adm *Adm) Connect(si int) (err error) {
 		return ErrNoSuchServer
 	}
 	for t := 100 * time.Millisecond; true; t *= 2 {
+		asn.Diag.Println("dialing", adm.config.Server[si].Url, "...")
 		conn, err = adm.dial(adm.config.Server[si].Url)
 		if conn != nil && err == nil {
 			break
@@ -217,6 +219,7 @@ func (adm *Adm) Connect(si int) (err error) {
 	if err != nil {
 		return
 	}
+	asn.Diag.Println("connected", adm.config.Server[si].Url)
 	adm.ephemeral.pub, adm.ephemeral.sec, _ = asn.NewRandomEncrKeys()
 	conn.Write(adm.ephemeral.pub[:])
 	adm.asn = asn.NewASN()
@@ -230,6 +233,7 @@ func (adm *Adm) Connect(si int) (err error) {
 		adm.ephemeral.pub,
 		adm.ephemeral.sec))
 	adm.asn.SetConn(conn)
+	adm.doneCh = make(chan error, 1)
 	adm.sigCh = make(chan os.Signal, 1)
 	signal.Notify(adm.sigCh, syscall.SIGINT, syscall.SIGTERM)
 	return
@@ -268,40 +272,8 @@ func (adm *Adm) dial(durl *asn.URL) (net.Conn, error) {
 	}
 }
 
-func (adm *Adm) Exec(args ...string) (err error) {
-	var pdu *asn.PDU
-	if args[len(args)-1] == "-" {
-		f, terr := adm.asn.Repos.Tmp.NewFile()
-		if terr != nil {
-			err = terr
-			return
-		}
-		pdu = asn.NewPDUFile(f)
-		f = nil
-	} else {
-		pdu = asn.NewPDUBuf()
-	}
-	v := adm.asn.Version()
-	v.WriteTo(pdu)
-	asn.ExecReqId.Version(v).WriteTo(pdu)
-	asn.NewRequesterString("exec").WriteTo(pdu)
-	pdu.Write([]byte(strings.Join(args, "\x00")))
-	if args[len(args)-1] == "-" {
-		pdu.Write([]byte{0}[:])
-		pdu.ReadFrom(Stdin)
-	}
-	adm.asn.Tx(pdu)
-	asn.Diag.Println(adm.asn.Name, asn.ExecReqId, strings.Join(args, " "))
-	ack, err, _ := adm.UntilAck()
-	if ack != nil {
-		if err == nil {
-			ack.WriteTo(Stdout)
-		} else if ack.Len() > 0 {
-			err = ack.Error()
-		}
-		ack.Free()
-	}
-	return
+func (adm *Adm) DN() string {
+	return adm.config.Dir
 }
 
 func (adm *Adm) File(pdu *asn.PDU) {
@@ -324,117 +296,20 @@ func (adm *Adm) File(pdu *asn.PDU) {
 	}
 	links = nil
 	blob.Free()
-	blob = nil
+	pdu.Free()
 }
 
-func (adm *Adm) IsAdmin(key *asn.EncrPub) bool {
-	return *key == *adm.config.Keys.Admin.Pub.Encr
-}
-
-func (adm *Adm) IsService(key *asn.EncrPub) bool {
-	return *key == *adm.config.Keys.Server.Pub.Encr
-}
-
-func (adm *Adm) Login() (err error) {
-	pdu := asn.NewPDUBuf()
-	key := adm.config.Keys.Admin.Pub.Encr
-	sig := adm.config.Keys.Admin.Sec.Auth.Sign(key[:])
-	v := adm.asn.Version()
-	v.WriteTo(pdu)
-	asn.LoginReqId.Version(v).WriteTo(pdu)
-	asn.NewRequesterString("login").WriteTo(pdu)
-	pdu.Write(key[:])
-	pdu.Write(sig[:])
-	adm.asn.Tx(pdu)
-	asn.Diag.Println(adm.asn.Name, asn.LoginReqId, key.String()[:8]+"...",
-		sig.String()[:8]+"...")
-	ack, err, _ := adm.UntilAck()
-	if ack != nil {
-		if err == nil {
-			adm.rekey(ack)
-		} else if ack.Len() > 0 {
-			err = ack.Error()
-		}
-		ack.Free()
-	}
-	return
-}
-
-func (adm *Adm) Pause() (err error) {
-	pdu := asn.NewPDUBuf()
-	v := adm.asn.Version()
-	v.WriteTo(pdu)
-	asn.PauseReqId.Version(v).WriteTo(pdu)
-	asn.NewRequesterString("pause").WriteTo(pdu)
-	adm.asn.Tx(pdu)
-	asn.Diag.Println(adm.asn.Name, asn.PauseReqId)
-	ack, err, _ := adm.UntilAck()
-	if ack != nil {
-		if err == nil {
-			adm.asn.SetStateSuspended()
-		} else if ack.Len() > 0 {
-			err = ack.Error()
-		}
-		ack.Free()
-	}
-	return
-}
-
-func (adm *Adm) rekey(pdu *asn.PDU) {
-	var peer asn.EncrPub
-	var nonce asn.Nonce
-	if pdu != nil {
-		pdu.Read(peer[:])
-		pdu.Read(nonce[:])
-		adm.asn.SetBox(asn.NewBox(2, &nonce, &peer,
-			adm.ephemeral.pub, adm.ephemeral.sec))
-		adm.asn.SetStateEstablished()
-	}
-}
-
-func (adm *Adm) Resume() (err error) {
-	pdu := asn.NewPDUBuf()
-	v := adm.asn.Version()
-	v.WriteTo(pdu)
-	asn.ResumeReqId.Version(v).WriteTo(pdu)
-	asn.NewRequesterString("resume").WriteTo(pdu)
-	adm.asn.Tx(pdu)
-	asn.Diag.Println(adm.asn.Name, asn.ResumeReqId)
-	ack, err, _ := adm.UntilAck()
-	if ack != nil {
-		if err == nil {
-			adm.rekey(pdu)
-		} else if ack.Len() > 0 {
-			err = ack.Error()
-		}
-		ack.Free()
-	}
-	return
-}
-
-func (adm *Adm) Quit() (err error) {
-	pdu := asn.NewPDUBuf()
-	v := adm.asn.Version()
-	v.WriteTo(pdu)
-	asn.QuitReqId.Version(v).WriteTo(pdu)
-	asn.NewRequesterString("quit").WriteTo(pdu)
-	adm.asn.Tx(pdu)
-	asn.Diag.Println(adm.asn.Name, asn.QuitReqId)
-	adm.asn.SetStateQuitting()
-	ack, err, _ := adm.UntilAck()
-	if ack != nil {
-		if err != nil && ack.Len() > 0 {
-			err = ack.Error()
-		}
-		ack.Free()
-	}
-	return err
-}
-
-func (adm *Adm) UntilAck() (pdu *asn.PDU, err error, req asn.Requester) {
-	for {
-		var v asn.Version
-		var id asn.Id
+func (adm *Adm) handler() {
+	var (
+		err error
+		pdu *asn.PDU
+		v   asn.Version
+		id  asn.Id
+	)
+	defer func() {
+		adm.doneCh <- err
+	}()
+	for err == nil {
 		for pdu == nil {
 			select {
 			case pdu = <-adm.asn.RxQ:
@@ -442,8 +317,7 @@ func (adm *Adm) UntilAck() (pdu *asn.PDU, err error, req asn.Requester) {
 					err = io.EOF
 					return
 				}
-			case sig := <-adm.sigCh:
-				asn.Diag.Println("caught", sig)
+			case <-adm.sigCh:
 				adm.asn.SetStateClosed()
 				err = io.EOF
 				return
@@ -452,32 +326,31 @@ func (adm *Adm) UntilAck() (pdu *asn.PDU, err error, req asn.Requester) {
 		if err = pdu.Open(); err != nil {
 			return
 		}
-		asn.Diag.Printf("Rx %p\n", pdu)
 		v.ReadFrom(pdu)
 		if v < adm.asn.Version() {
 			adm.asn.SetVersion(v)
 		}
 		id.ReadFrom(pdu)
 		id.Internal(v)
+		asn.Diag.Println("handle", id)
 		switch id {
 		case asn.AckReqId:
-			var e asn.Err
-			req.ReadFrom(pdu)
-			e.ReadFrom(pdu)
-			e.Internal(adm.asn.Version())
-			err = e.ErrToError()
-			return
+			err = adm.asn.Acker.Rx(pdu)
 		case asn.BlobId:
 			adm.File(pdu)
-			pdu.Free()
-			pdu = nil
 		default:
 			asn.Diag.Println(adm.asn.Name, id)
-			pdu.Free()
-			pdu = nil
 			err = asn.ErrUnsupported
-			return
 		}
-
+		pdu.Free()
+		pdu = nil
 	}
+}
+
+func (adm *Adm) IsAdmin(key *asn.EncrPub) bool {
+	return *key == *adm.config.Keys.Admin.Pub.Encr
+}
+
+func (adm *Adm) IsService(key *asn.EncrPub) bool {
+	return *key == *adm.config.Keys.Server.Pub.Encr
 }

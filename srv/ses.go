@@ -14,6 +14,7 @@ import (
 )
 
 type Ses struct {
+	name string
 	ASN  *asn.ASN
 	srv  *Server
 	Keys struct {

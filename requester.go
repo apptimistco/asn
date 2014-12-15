@@ -5,11 +5,28 @@
 package asn
 
 import (
+	"encoding/binary"
 	"io"
 	"strconv"
+	"sync"
 )
 
+var req struct {
+	mutex *sync.Mutex
+	n     uint64
+}
+
 type Requester [8]byte
+
+func init() { req.mutex = new(sync.Mutex) }
+
+func NextRequester() (r Requester) {
+	req.mutex.Lock()
+	defer req.mutex.Unlock()
+	binary.BigEndian.PutUint64(r[:], req.n)
+	req.n += 1
+	return
+}
 
 func NewRequesterString(s string) (r Requester) {
 	copy(r[:], []byte(s))

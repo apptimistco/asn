@@ -10,7 +10,12 @@ Fetch, build and install `asn` or the versioned package with GO tool.
 
 This will install these external dependencies.
     code.google.com/p/go.net/websocket
+    code.google.com/p/go-gnureadline
     gopkg.in/yaml.v1
+
+Note: `go-gnureadline` requires libreadline-dev; so, on Ubuntu:
+
+    sudo apt-get install libreadline-dev
 
 Test the dependencies.
 
@@ -65,3 +70,7 @@ To run `asn` under MacOS, start by installing Go tools.
   or, after installing Macports: https://guide.macports.org/
 
     sudo port install mercurial
+
+- Install readline before getting asn
+
+    sudo port install readline

@@ -17,10 +17,8 @@ For CONFIG format, see:
 package srv
 
 import (
-	"golang.org/x/net/websocket"
 	"errors"
 	"fmt"
-	"github.com/apptimistco/asn"
 	"io"
 	"io/ioutil"
 	"log"
@@ -32,6 +30,9 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/apptimistco/asn"
+	"golang.org/x/net/websocket"
 )
 
 const (
@@ -272,7 +273,6 @@ func (srv *Server) handler(conn net.Conn) {
 		err := pdu.Open()
 		if err != nil {
 			pdu.Free()
-			pdu = nil
 			break
 		}
 		var (
@@ -285,7 +285,10 @@ func (srv *Server) handler(conn net.Conn) {
 		}
 		id.ReadFrom(pdu)
 		id.Internal(v)
+		asn.Diag.Println("Rx", id)
 		switch id {
+		case asn.AckReqId:
+			err = ses.ASN.Acker.Rx(pdu)
 		case asn.ExecReqId:
 			err = ses.RxExec(pdu)
 		case asn.LoginReqId:
@@ -304,9 +307,10 @@ func (srv *Server) handler(conn net.Conn) {
 			} else {
 				err = asn.ErrUnsupported
 			}
-
 		}
-		pdu.Free()
+		if id != asn.ExecReqId {
+			pdu.Free() // otherwise free in RxExec go routine
+		}
 		pdu = nil
 		if err != nil {
 			ses.ASN.Println("Error:", err)

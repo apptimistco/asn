@@ -281,28 +281,38 @@ PLACE are the UTF-8, hexadecimal encoding of the respective public encryption
 keys that may be abbreviated to whatever uniquely identifies them.  GIT
 experience suggests that 8 characters may be sufficient.
 
+LATITUDE and LONGITUDE are UTF-8 decimal encoding of floating point degrees.
+
 BLOB is one of these ASN object references:
 
-    BLOB = <FILE|SUM|USER[@EPOCH]|[USER]@EPOCH|[USER/]NAME[@EPOCH]>
+    BLOB = -
+    BLOB = FILE | DIR
+    BLOB = '$'<'*' | SUM>[@TIME]
+    BLOB = ['~'['*' | '.' | USER]][GLOB][@TIME]
 
-The default USER is LOGIN and the wild card USER is SERVICE meaning for all
-users if followed by a path NAME; otherwise, SERVICE by itself or with @EPOCH
-is wildcard for all SUM files.
+The hyphen ('-') indicates that additional references are listed after the
+end-of-command separator.
 
-FILE is a local file system name used only in testing.
+FILE and DIR are a local file system names used only in testing.
 
-NAME may have forward slash ("/") hierarchy. If the base component of the name
-is hexadecimal, as with messages, it may be abbreviated like USER.
-Alternatively, the base component may use shell `*` and `?` expansion
+The dollar symbol introduces a blob sum reference. An asterisk is a wild card
+for all blobs made after any given time. Otherwise, SUM is a UTF-8 hexadecimal
+encoding of the 64-byte SHA512 sum of the referenced blob file that may be
+abbreviated to as few as 8 characters.
+
+The tilde symbol introduces a user reference with LOGIN as default; asterisk
+for all users; and period for all users that have marked on the session
+server. Otherwise, USER is a UTF-8 hexadecimal encoding of the 32-byte public
+encryption key that may be abbreviated to as few as 8 characters.
+
+GLOB may have forward slash ("/") hierarchy with `*` and `?` expansion
 characters to match repository names (e.g. `asn/hel*` for `asn/hello`)
 
-SUM is a UTF-8 hexadecimal encoding of the 64-byte SHA512 sum of the
-referenced blob file. This may be abbreviated to as few as 8 characters.
-
-EPOCH is a UTF-8 decimal encoding of the 64-bit integer nanoseconds since
-the Unix epoch (00:00:00.000000 Jan 1, 1970)
-
-LATITUDE and LONGITUDE are UTF-8 decimal encoding of floating point degrees.
+TIME is a UTF-8 decimal or '0x' prefaced hexadecimal encoding of the 64-bit
+integer nanoseconds since the Unix epoch (00:00:00.000000 Jan 1, 1970).
+TIME may also be an ANSIC, Unix, or RFC{822,850,1123,3339} formatted string.
+TIME may even be expressed in terms of duration since now; for example:
+"1h", "30m" or "1h30m".
 
 ### approve ###
     approve BLOB...
@@ -335,7 +345,7 @@ acknowledge with the contents (without header) of the named or referenced
 blobs.
 
 ### clone ###
-    clone [URL|MIRROR][@EPOCH]
+    clone [URL|MIRROR][@TIME]
 
 A administrator may exec this command in the `established` state to replicate
 or update an ASN repository. With the URL or MIRROR argument the administrator
@@ -356,13 +366,13 @@ space separated list of arguments suffixed by a trailing newline.
 An administrator or mirror may exec this command in the `established` state
 for the server to send all matching objects before its acknowledgment.
 
-This requests everything since EPOCH for the LOGIN user.
+This requests everything since TIME for the LOGIN user.
 
-    fetch @EPOCH
+    fetch @TIME
 
-This requests messages to the USER since EPOCH.
+This requests messages to the USER since TIME.
 
-    fetch USER/asn/messages@EPOCH
+    fetch USER/asn/messages@TIME
 
 This requests the blob containing USER's ASN authentication key.
 
@@ -373,13 +383,13 @@ This requests blobs with the given SHA sums.
     fetch SUM...
 
 ### gc ###
-    gc [@EPOCH]
+    gc [@TIME]
 
 An administrator may exec this command in the `established` state for the
 server to remove all singularly linked SUM files.
 
 ### ls ###
-    ls BLOB...
+    ls [BLOB...]
 
 The device may exec this command in the `established` state for the server to
 acknowledge with a newline separated list of matching link names.
@@ -392,10 +402,9 @@ acknowledge with a newline separated list of matching link names.
 
 The device requests the list of messages since a given epoch like this.
 
-    ls asn/messages@1412294821523593019
+    ls asn/messages@13a65fa000000000
 
-    1ed9d26bba5632460bd1a492a6419abb
-    60b195f9a2b15f175a49e63d4647755e
+    asn/messages/13a65fa17219228e_32fa7966f4034142
 
 Or list blobs named with a given prefix that are newer than epoch.
 
@@ -404,8 +413,7 @@ Or list blobs named with a given prefix that are newer than epoch.
     asn/auth
 
 ### mark ###
-    mark [-u USER] <LATITUDE LONGITUDE>
-    mark [-u USER] <7?PLACE>
+    mark [-u USER] [LATITUDE LONGITUDE | 7?PLACE]
 
 The device may exec this command in the `established` state for the server to
 create, process and distribute a [Mark](#mark) blob with LOGIN as the default
@@ -419,6 +427,9 @@ intermediate character to encode an ETA.
 Permitted sessions may exec this command to mark location of events and places
 with the USER argument.  The device may also make an anonymous mark using the
 session ephemeral key as USER.
+
+A mark command without LATITUDE and LOGITUDE or PLACE will remove an earlier
+mark.
 
 ### newuser ###
     newuser <"actual"|"bridge"|"forum"|"place">
@@ -602,7 +613,7 @@ non-zero `eta` if in transit.  The service distributes these blobs to all
 permitted sessions. Also, a newly established session may retrieve earlier
 marks with this exec command.
 
-    cat SERVICE/asn/mark[@EPOCH]
+    cat SERVICE/asn/mark[@TIME]
 
 The service notes that a session has terminated or suspended by distributing a
 mark blob with the associated user key (login or ephemeral) as `place` and a
@@ -649,7 +660,10 @@ its sum.
 The DERIVED name is this contenation of the hexadecimal creation time and the
 abbreviated SUM.
 
-    DERIVED = EPOCH "_" SUM[:16]
+    DERIVED = UNIXNANO "_" SUM[:16]
+
+Where UNIXNANO is the UTF-8 hexadecimal encoding of the number of nano-seconds
+since the Unix epoch.
 
 ## Server Affinity ##
 Before login, the App consults a proprietary table to connect with the server
