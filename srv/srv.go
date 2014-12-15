@@ -17,7 +17,7 @@ For CONFIG format, see:
 package srv
 
 import (
-	"code.google.com/p/go.net/websocket"
+	"golang.org/x/net/websocket"
 	"errors"
 	"fmt"
 	"github.com/apptimistco/asn"
