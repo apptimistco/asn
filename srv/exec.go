@@ -13,6 +13,7 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -30,6 +31,7 @@ const (
 	UsageClone   = `clone [NAME][@TIME]`
 	UsageEcho    = `echo [STRING]...`
 	UsageFetch   = `fetch BLOB...`
+	UsageFilter  = `filter FILTER [ARGS... --] [BLOB...]`
 	UsageGC      = `gc [-v|--verbose] [-n|--dry-run] [@TIME]`
 	UsageIam     = `iam NAME`
 	UsageLS      = `ls [BLOB...]`
@@ -56,6 +58,8 @@ const (
 	Replicate or update an object repository.
     ` + UsageEcho + `
 	Returns space separated ARGS in the Ack data.
+    ` + UsageFilter + `
+	Returns STDOUT of FILTER program run with list of blobs as STDIN.
     ` + UsageFetch + `
 	Before acknowledgement the server sends all matching blobs.
     ` + UsageGC + `
@@ -98,6 +102,7 @@ var (
 	ErrUsageClone   = errors.New("usage: " + UsageClone)
 	ErrUsageEcho    = errors.New("usage: " + UsageEcho)
 	ErrUsageFetch   = errors.New("usage: " + UsageFetch)
+	ErrUsageFilter  = errors.New("usage: " + UsageFilter)
 	ErrUsageGC      = errors.New("usage: " + UsageGC)
 	ErrUsageIam     = errors.New("usage: " + UsageIam)
 	ErrUsageLS      = errors.New("usage: " + UsageLS)
@@ -161,6 +166,8 @@ func (ses *Ses) Exec(req asn.Requester, r io.Reader,
 		return strings.Join(args[1:], " ") + "\n"
 	case "fetch":
 		return ses.ExecFetch(r, args[1:]...)
+	case "filter":
+		return ses.ExecFilter(req, r, args[1:]...)
 	case "gc":
 		return ses.ExecGC(req, args[1:]...)
 	case "iam":
@@ -424,6 +431,73 @@ func (ses *Ses) ExecFetch(r io.Reader, args ...string) interface{} {
 		return nil
 	}, r, args...)
 	return err
+}
+
+func (ses *Ses) ExecFilter(req asn.Requester,
+	r io.Reader, args ...string) interface{} {
+	if len(args) < 1 {
+		return ErrUsageFilter
+	}
+	ack, err := ses.ASN.NewAckSuccessPDUFile(req)
+	if err != nil {
+		return err
+	}
+	filterArgs := []string{}
+	blobArgs := args[1:]
+	for i, arg := range args[1:] {
+		if arg == "--" {
+			filterArgs = args[1:i]
+			blobArgs = args[i+1:]
+		}
+	}
+	cmd := exec.Command(args[0], filterArgs...)
+	cmdStdin, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+	cmdStdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	cmdStderr, err := cmd.StderrPipe()
+	if err != nil {
+		return err
+	}
+	if err = cmd.Start(); err != nil {
+		return err
+	}
+	var errbuf []byte
+	blobberErr := make(chan error, 1)
+	outDone := make(chan bool, 1)
+	errDone := make(chan bool, 1)
+	go func() {
+		defer cmdStdin.Close()
+		asn.Diag.Println("blobArgs:", strings.Join(blobArgs, " "))
+		blobberErr <- ses.Blobber(func(fn string) error {
+			fmt.Fprintln(cmdStdin, fn)
+			return nil
+		}, r, blobArgs...)
+
+	}()
+	go func() {
+		ack.ReadFrom(cmdStdout)
+		outDone <- true
+	}()
+	go func() {
+		errbuf, _ = ioutil.ReadAll(cmdStderr)
+		errDone <- true
+	}()
+	<-outDone
+	<-errDone
+	if err = cmd.Wait(); err != nil {
+		ack.Free()
+		return errors.New(string(errbuf))
+	}
+	if err = <-blobberErr; err != nil {
+		ack.Free()
+		return err
+	}
+	return ack
 }
 
 func (ses *Ses) ExecGC(req asn.Requester, args ...string) interface{} {
@@ -789,7 +863,7 @@ func (ses *Ses) Blobber(f func(fn string) error, r io.Reader,
 		default:
 			glob, mustExist = arg, true
 			err = uf(login)
-		case arg == "", arg == "~":
+		case arg == "", arg == "~", arg == "*":
 			glob, mustExist = "*", false
 			err = uf(login)
 		case arg[0:2] == "~/":

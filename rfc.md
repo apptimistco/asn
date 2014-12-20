@@ -382,6 +382,13 @@ This requests blobs with the given SHA sums.
 
     fetch SUM...
 
+### filter ###
+    filter FILTER [ARGS... --] [BLOB...]
+
+The device may exec this command in the `established` state for the server to
+acknowledge with the output of the FILTER program with the list of newline
+separated blob filenames as the program input.
+
 ### gc ###
     gc [@TIME]
 
