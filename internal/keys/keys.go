@@ -26,7 +26,7 @@ Package keys provides random server and admin keys for an ASN service.
 package keys
 
 import (
-	"github.com/apptimistco/asn"
+	"github.com/apptimistco/asn/internal/asn"
 	"gopkg.in/yaml.v1"
 	"io"
 	"os"

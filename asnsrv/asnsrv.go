@@ -2,11 +2,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package asnsrv provides a main wrapper to github.com/apptimistco/asn/srv
+// Package asnsrv provides a main wrapper to github.com/apptimistco/asn/internal/srv
 package main
 
 import (
-	"github.com/apptimistco/asn/srv"
+	"github.com/apptimistco/asn/internal/srv"
 	"os"
 )
 

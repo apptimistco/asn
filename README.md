@@ -1,16 +1,17 @@
 Package `asn` implements the _Apptimist Social Network Protocol_ described in
 this [RFC]( https://github.com/apptimistco/rfc/blob/master/asn.md).
 
-Fetch, build and install `asn` or the versioned package with GO tool.
+Fetch `asn` and its dependencies with GO tool.
 
-    go get -u github.com/apptimistco/asn
-    go get -u gopkg.in/apptimistco/asn.v0
+    go get -t -u github.com/apptimistco/asn
 
 (See the [MacOS](#macos) section for running `asn` on that instead of Linux)
 
 This will install these external dependencies.
-    code.google.com/p/go.net/websocket
-    code.google.com/p/go-gnureadline
+    github.com/agl/ed25519
+    github.com/tgrennan/go-gnureadline
+    golang.org/x/crypto
+    golang.org/x/net
     gopkg.in/yaml.v1
 
 Note: `go-gnureadline` requires libreadline-dev; so, on Ubuntu:
@@ -23,13 +24,13 @@ Test the dependencies.
 
 Run the package tests.
 
-    go test github.com/apptimistco/asn/tests
+    go test github.com/apptimistco/asn
 
-Install the server, admin, and key generations programs.
+Install the server, admin, and key generation programs.
 
-    go install github.com/apptimistco/asn/srv/asnsrv
-    go install github.com/apptimistco/asn/adm/asnadm
-    go install github.com/apptimistco/asn/keys/asnkeys
+    go install github.com/apptimistco/asn/asnsrv
+    go install github.com/apptimistco/asn/asnadm
+    go install github.com/apptimistco/asn/asnkeys
 
 Generate keys and hack a config.
 
@@ -55,22 +56,27 @@ https://godoc.org/github.com/apptimistco/asn)
 #### MacOS ####
 To run `asn` under MacOS, start by installing Go tools.
 
-- Download latest installer: https://golang.org/dl/
-- Open and install `go1.*.darwin-amd64-osx10.8.pkg`
-- Setenv
+a. Prebuilt install
+  - Download latest https://golang.org/dl/
+  - Open and install `go1.*.darwin-amd64-osx10.8.pkg`
+  - Setenv
 
     export GOROOT=/usr/local/go
-    export PATH=$PATH:$GOROOT/bin
-    export GOPATH=${HOME}
-    export GOBIN=${HOME}/.local/bin
+    export GOPATH=${HOME}/go
+    export PATH=$PATH:$GOROOT/bin:$GOPATH/bin
 
-- See http://golang.org/s/gogetcmd to download Version Control Tools
-  The Xcode development kit includes Git but you'll need Mercurial
-  http://mercurial.selenic.com/downloads
-  or, after installing Macports: https://guide.macports.org/
+b. Build from source
+
+    export GOPATH=$HOME/go
+    git clone --branch go1.4 https://go.googlesource.com/go
+    (cd go/src; ./all.bash)
+
+See http://golang.org/s/gogetcmd to download Version Control Tools
+The Xcode development kit includes Git but you may need Mercurial http://mercurial.selenic.com/downloads
+or, after installing Macports: https://guide.macports.org/
 
     sudo port install mercurial
 
-- Install readline before getting asn
+Install readline before getting asn.
 
     sudo port install readline

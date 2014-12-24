@@ -7,7 +7,7 @@ package adm
 import (
 	"strings"
 
-	"github.com/apptimistco/asn"
+	"github.com/apptimistco/asn/internal/asn"
 )
 
 func (adm *Adm) Exec(args ...string) (err error) {

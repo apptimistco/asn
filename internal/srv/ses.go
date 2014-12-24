@@ -7,7 +7,7 @@ package srv
 import (
 	"bufio"
 	"crypto/rand"
-	"github.com/apptimistco/asn"
+	"github.com/apptimistco/asn/internal/asn"
 	"os"
 	"strings"
 	"syscall"

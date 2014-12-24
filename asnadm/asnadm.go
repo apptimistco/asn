@@ -2,11 +2,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package asnadm provides a main wrapper to github.com/apptimistco/asn/adm
+// Package asnadm provides a main wrapper to github.com/apptimistco/asn/internal/adm
 package main
 
 import (
-	"github.com/apptimistco/asn/adm"
+	"github.com/apptimistco/asn/internal/adm"
 	"os"
 )
 

@@ -2,15 +2,16 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package tests
+package asn
 
 import (
 	"flag"
-	"github.com/apptimistco/asn/adm"
-	"github.com/apptimistco/asn/srv"
 	"os"
 	"sync"
 	"testing"
+
+	"github.com/apptimistco/asn/internal/adm"
+	"github.com/apptimistco/asn/internal/srv"
 )
 
 var (

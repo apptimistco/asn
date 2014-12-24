@@ -2,11 +2,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package asnkeys provides a main wrapper to github.com/apptimistco/asn/keys
+// Package asnkeys provides a main wrapper to github.com/apptimistco/asn/internal/keys
 package main
 
 import (
-	"github.com/apptimistco/asn/keys"
+	"github.com/apptimistco/asn/internal/keys"
 	"os"
 )
 

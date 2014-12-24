@@ -4,17 +4,16 @@
 
 # ASN test build, config and generated files
 asnadm
-!/adm/asnadm
+!/asnadm
 asnkeys
-!/keys/asnkeys
+!/asnkeys
 asnsrv
-!/srv/asnsrv
-/tests/*.yaml
-/tests/*.test
-/tests/*.pprof
-/tests/*.yaml
-/tests/*.asn
-/tests/*.diag
-/tests/*.log
-/tests/*.pid
-/tests/*.sock
+!/asnsrv
+*.yaml
+*.test
+*.pprof
+*.asn
+*.diag
+*.log
+*.pid
+*.sock

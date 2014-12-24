@@ -15,14 +15,14 @@ Exmples:
 	$ asnadm siren.yaml:sf echo hello world
 
 For CONFIG format, see:
-	$ godoc github.com/apptimistco/asn Config
+	$ godoc github.com/apptimistco/asn/internal/asn Config
 */
 package adm
 
 import (
-	"golang.org/x/net/websocket"
 	"errors"
-	"github.com/apptimistco/asn"
+	"github.com/apptimistco/asn/internal/asn"
+	"golang.org/x/net/websocket"
 	"io"
 	"net"
 	"os"

@@ -2,14 +2,15 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package tests
+package asn
 
 import (
 	"bytes"
-	"github.com/apptimistco/asn/keys"
 	"io/ioutil"
 	"os"
 	"text/template"
+
+	"github.com/apptimistco/asn/internal/keys"
 )
 
 var (

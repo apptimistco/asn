@@ -2,12 +2,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package tests
+package asn
 
 import (
 	"fmt"
-	"github.com/apptimistco/asn"
 	"testing"
+
+	"github.com/apptimistco/asn/internal/asn"
 )
 
 // Show PDU Ids per version.

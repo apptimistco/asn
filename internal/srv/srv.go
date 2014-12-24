@@ -12,7 +12,7 @@ listeners with SIGTERM; and stops both listeners and accepted connections
 with SIGINT.
 
 For CONFIG format, see:
-	$ godoc github.com/apptimistco/asn Config
+	$ godoc github.com/apptimistco/asn/internal/asn Config
 */
 package srv
 
@@ -31,7 +31,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/apptimistco/asn"
+	"github.com/apptimistco/asn/internal/asn"
 	"golang.org/x/net/websocket"
 )
 
