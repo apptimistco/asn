@@ -28,11 +28,12 @@ func init() {
 	TraceFilter(RawId)
 }
 
-// Println formats the given operands with space separation to the log ring.
-func Println(a ...interface{}) (n int, err error) {
+// Println formats the given operands with space separation to the log ring
+// prefixed by the ASN session Name.
+func (asn *ASN) Println(a ...interface{}) (n int, err error) {
 	ringMutex.Lock()
 	defer ringMutex.Unlock()
-	ring[ringIndex] = fmt.Sprintln(a...)
+	ring[ringIndex] = asn.Name.Session + " " + fmt.Sprintln(a...)
 	n = len(ring[ringIndex])
 	ringIndex += 1
 	if ringIndex == ringSize {
@@ -42,7 +43,7 @@ func Println(a ...interface{}) (n int, err error) {
 }
 
 // Trace provides filtered println to log ring.
-func Trace(v ...interface{}) (n int, err error) {
+func (asn *ASN) Trace(v ...interface{}) (n int, err error) {
 	var id Id
 	var ok bool
 	for _, t := range v {
@@ -51,7 +52,7 @@ func Trace(v ...interface{}) (n int, err error) {
 		}
 	}
 	if ok && id < Nids && unfilter[id] {
-		n, err = Println(v...)
+		n, err = asn.Println(v...)
 	}
 	return
 }

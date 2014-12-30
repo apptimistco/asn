@@ -14,3 +14,5 @@ func (nd *nodiag) Output(_ int, _ string) error      { return nil }
 func (nd *nodiag) Print(_ ...interface{})            {}
 func (nd *nodiag) Printf(_ string, _ ...interface{}) {}
 func (nd *nodiag) Println(_ ...interface{})          {}
+func (asn *ASN) Diag(_ ...interface{})               {}
+func (asn *ASN) Diagf(_ string, _ ...interface{})    {}

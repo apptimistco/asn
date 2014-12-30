@@ -6,7 +6,9 @@ package asn
 
 import (
 	"flag"
+	"io/ioutil"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -15,15 +17,19 @@ import (
 )
 
 var (
-	Stdin  = os.Stdin
-	Stdout = os.Stdout
-	Clean  = flag.Bool("clean", false, "clean repos before test")
-	Once   sync.Once
+	Clean    = flag.Bool("clean", false, "clean repos before test")
+	Once     sync.Once
+	MayTrace = ""
 )
 
 func srvTestSetup() {
 	procflags()
 	WriteConfigs()
+	if testing.Verbose() {
+		MayTrace = "trace flush\n"
+	} else {
+		adm.Stdout = ioutil.Discard
+	}
 }
 
 func procflags() {
@@ -54,17 +60,7 @@ func TestArgs(t *testing.T) {
 func TestNoLoginEcho(t *testing.T) {
 	Once.Do(srvTestSetup)
 	go asnsrv(t, SrvConfigFN)
-	for i, s := range []string{"unix", "ws"} {
-		var adm adm.Adm
-		if err := adm.Config(AdmConfigFN); err != nil {
-			t.Error(s, err)
-		} else if err = adm.Connect(i); err != nil {
-			t.Error(s, err)
-		} else if err = adm.Exec("echo", "hello"); err != nil {
-			t.Error(s, err)
-		}
-		adm.Close()
-	}
+	asnadm(t, "-nologin", AdmConfigFN, "echo", "hello", "world")
 	srv.KillAll(os.Interrupt)
 }
 
@@ -75,7 +71,7 @@ func TestLoginEcho(t *testing.T) {
 	srv.KillAll(os.Interrupt)
 }
 
-func TestLoginTrace(t *testing.T) {
+func TestTrace(t *testing.T) {
 	Once.Do(srvTestSetup)
 	go asnsrv(t, SrvConfigFN)
 	asnadm(t, AdmConfigFN, "trace", "flush")
@@ -83,81 +79,56 @@ func TestLoginTrace(t *testing.T) {
 }
 
 func TestSuspend(t *testing.T) {
-	var adm adm.Adm
 	Once.Do(srvTestSetup)
 	go asnsrv(t, SrvConfigFN)
-	if err := adm.Config(AdmConfigFN); err != nil {
-		t.Error(err)
-	} else if err = adm.Connect(0); err != nil {
-		t.Error(err)
-	} else if err = adm.Login(); err != nil {
-		t.Error(err)
-	} else if err = adm.Exec("echo", "hello", "world"); err != nil {
-		t.Error(err)
-	} else if err = adm.Pause(); err != nil {
-		t.Error(err)
-	} else if err = adm.Resume(); err != nil {
-		t.Error(err)
-	} else if err = adm.Exec("echo", "Awaken!"); err != nil {
-		t.Error(err)
-	} else if testing.Verbose() {
-		adm.Exec("trace")
-	}
-	adm.Quit()
-	adm.Close()
+	adm.Stdin = strings.NewReader(`
+echo hello world
+pause
+resume
+echo Awaken!
+` + MayTrace)
+	asnadm(t, AdmConfigFN, "-")
 	srv.KillAll(os.Interrupt)
 }
 
 func TestHelloBlob(t *testing.T) {
-	var adm adm.Adm
 	Once.Do(srvTestSetup)
 	go asnsrv(t, SrvConfigFN)
-	adm.Config(AdmConfigFN)
-	adm.Connect(0)
-	adm.Login()
-	adm.Blob("asn/hello", "hello world\n")
-	adm.Quit()
-	adm.Close()
+	adm.Stdin = strings.NewReader(`
+blob asn/hello hello world
+` + MayTrace)
+	asnadm(t, AdmConfigFN, "-")
 	srv.KillAll(os.Interrupt)
 }
 
 func TestHelloAgainBlob(t *testing.T) {
-	var adm adm.Adm
 	Once.Do(srvTestSetup)
 	go asnsrv(t, SrvConfigFN)
-	adm.Config(AdmConfigFN)
-	adm.Connect(0)
-	adm.Login()
-	adm.Blob("asn/hello", "hello world\n")
-	adm.Blob("asn/hello", "hello it's me\n")
-	adm.Quit()
-	adm.Close()
+	adm.Stdin = strings.NewReader(`
+blob asn/hello hello world
+blob asn/hello its me
+` + MayTrace)
+	asnadm(t, AdmConfigFN, "-")
 	srv.KillAll(os.Interrupt)
 }
 
 func TestAuthBlob(t *testing.T) {
-	var adm adm.Adm
 	Once.Do(srvTestSetup)
 	go asnsrv(t, SrvConfigFN)
-	adm.Config(AdmConfigFN)
-	adm.Connect(0)
-	adm.Login()
-	adm.AuthBlob()
-	adm.Quit()
-	adm.Close()
+	adm.Stdin = strings.NewReader(`
+auth-blob
+` + MayTrace)
+	asnadm(t, AdmConfigFN, "-")
 	srv.KillAll(os.Interrupt)
 }
 
 func TestMessageBlobs(t *testing.T) {
-	var adm adm.Adm
 	Once.Do(srvTestSetup)
 	go asnsrv(t, SrvConfigFN)
-	adm.Config(AdmConfigFN)
-	adm.Connect(0)
-	adm.Login()
-	adm.Blob("", "hello world\n")
-	adm.Blob("", "hello it's me\n")
-	adm.Quit()
-	adm.Close()
+	adm.Stdin = strings.NewReader(`
+blob asn/messages/ hello world
+blob asn/messages/ its me
+` + MayTrace)
+	asnadm(t, AdmConfigFN, "-")
 	srv.KillAll(os.Interrupt)
 }

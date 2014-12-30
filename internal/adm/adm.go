@@ -6,13 +6,17 @@
 Package adm provides a command line ASN administrator.
 It's methods are also used for progromatic ASN testing.
 
-Usage: asnadm CONFIG[:SERVER] [COMMAND [ARGUMENTS...]]
+Usage: asnadm [-nologin] CONFIG[:SERVER] [- | COMMAND [ARGUMENTS...]]
 
 Exmples:
 
 	$ asnadm siren.yaml echo hello world
 	$ asnadm siren.yaml:1 echo hello world
 	$ asnadm siren.yaml:sf echo hello world
+	$ asnadm siren.yaml:sf - <<EOF
+	echo hello world
+	EOF
+	$ asnadm siren.yaml:sf	# gnu-readline CLI
 
 For CONFIG format, see:
 	$ godoc github.com/apptimistco/asn/internal/asn Config
@@ -20,9 +24,9 @@ For CONFIG format, see:
 package adm
 
 import (
+	"bufio"
 	"errors"
-	"github.com/apptimistco/asn/internal/asn"
-	"golang.org/x/net/websocket"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -31,10 +35,13 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/apptimistco/asn/internal/asn"
+	"golang.org/x/net/websocket"
 )
 
 const (
-	Usage = "Usage: asnadm CONFIG[:SERVER] [COMMAND [ARGUMENTS...]]"
+	Usage = "Usage: asnadm [-nologin] CONFIG[:SERVER] [COMMAND [ARGS...]]"
 )
 
 var (
@@ -49,14 +56,21 @@ var (
 
 func Main(args ...string) (err error) {
 	var adm Adm
+	nologin := false
+	err = ErrUsage
 	if help(args...) {
 		return
 	}
-	if err = ErrUsage; len(args) < 1 {
+	if len(args) < 2 {
 		return
 	}
-	config := args[1]
-	args = args[2:]
+	args = args[1:] // strip progam name
+	if args[0] == "-nologin" || args[0] == "--nologin" {
+		nologin = true
+		args = args[1:]
+	}
+	config := args[0]
+	args = args[1:]
 	server := ""
 	colon := strings.Index(config, ":")
 	if colon > 0 {
@@ -76,11 +90,21 @@ func Main(args ...string) (err error) {
 		return
 	}
 	go adm.handler()
-	if err = adm.Login(); err == nil {
+	if nologin == false {
+		err = adm.Login()
+	}
+	if err == nil {
 		if len(args) > 0 {
-			err = adm.Exec(args...)
+			if args[0] == "-" {
+				err = adm.script(Stdin)
+			} else {
+				err = adm.Exec(args...)
+			}
 		} else {
 			err = adm.cli()
+		}
+		if err == io.EOF {
+			err = nil
 		}
 		if qerr := adm.Quit(); err == nil && qerr != nil {
 			err = qerr
@@ -92,7 +116,6 @@ func Main(args ...string) (err error) {
 	} else {
 		<-adm.doneCh
 	}
-	asn.Diag.Println("done")
 	adm.Close()
 	if err == io.EOF {
 		err = nil
@@ -155,7 +178,7 @@ func (adm *Adm) Blob(name string, v interface{}) (err error) {
 	}
 	if _, _, err = blob.SummingWriteContentsTo(f, v); err == nil {
 		adm.asn.Tx(asn.NewPDUFile(f))
-		asn.Diag.Println(adm.asn.Name, asn.BlobId, name)
+		adm.asn.Diag(asn.BlobId, name)
 	}
 	f = nil
 	return
@@ -190,6 +213,31 @@ func (adm *Adm) Close() {
 	}
 }
 
+// command process given line as space separated args
+func (adm *Adm) cmdLine(line string) error {
+	args := strings.Split(line, " ")
+	if len(args) == 0 || args[0] == "" {
+		return nil
+	}
+	switch args[0] {
+	case "quit":
+		return io.EOF
+	case "auth-blob":
+		return adm.AuthBlob()
+	case "login":
+		return adm.Login()
+	case "pause":
+		return adm.Pause()
+	case "resume":
+		return adm.Resume()
+	default:
+		if err := adm.Exec(args...); err != nil {
+			fmt.Println(err)
+		}
+	}
+	return nil
+}
+
 // Config[ure] the Adm from the named file or inline.
 func (adm *Adm) Config(s string) (err error) {
 	adm.config, err = asn.NewConfig(s)
@@ -206,7 +254,8 @@ func (adm *Adm) Connect(si int) (err error) {
 		return ErrNoSuchServer
 	}
 	for t := 100 * time.Millisecond; true; t *= 2 {
-		asn.Diag.Println("dialing", adm.config.Server[si].Url, "...")
+		asn.Diag.Println(adm.config.Name, "dialing",
+			adm.config.Server[si].Url, "...")
 		conn, err = adm.dial(adm.config.Server[si].Url)
 		if conn != nil && err == nil {
 			break
@@ -219,14 +268,17 @@ func (adm *Adm) Connect(si int) (err error) {
 	if err != nil {
 		return
 	}
-	asn.Diag.Println("connected", adm.config.Server[si].Url)
+	asn.Diag.Println(adm.config.Name, "connected to",
+		adm.config.Server[si].Url)
 	adm.ephemeral.pub, adm.ephemeral.sec, _ = asn.NewRandomEncrKeys()
 	conn.Write(adm.ephemeral.pub[:])
 	adm.asn = asn.NewASN()
 	if adm.asn.Repos, err = asn.NewRepos(adm.config.Dir); err != nil {
 		return
 	}
-	adm.asn.Name = adm.config.Name + "[" + adm.config.Server[si].Name + "]"
+	adm.asn.Name.Local = adm.config.Name
+	adm.asn.Name.Remote = adm.config.Server[si].Name
+	adm.asn.Name.Session = adm.asn.Name.Local + ":" + adm.asn.Name.Remote
 	adm.asn.SetBox(asn.NewBox(2,
 		adm.config.Keys.Nonce,
 		adm.config.Keys.Server.Pub.Encr,
@@ -279,17 +331,17 @@ func (adm *Adm) DN() string {
 func (adm *Adm) File(pdu *asn.PDU) {
 	blob, err := asn.NewBlobFrom(pdu)
 	if err != nil {
-		asn.Diag.Println(adm.asn.Name, "Error:", err)
+		adm.asn.Diag("NewBlob", err)
 		return
 	}
 	sum, fn, err := adm.asn.Repos.File(blob, pdu)
 	if err != nil {
-		asn.Diag.Println(adm.asn.Name, err)
+		adm.asn.Diag("File", err)
 	}
 	links, err := adm.asn.Repos.MkLinks(blob, sum, fn)
 	for i := range links {
 		if links[i] != nil {
-			asn.Diag.Println(adm.asn.Name, "saved", links[i].FN)
+			adm.asn.Diag("saved", links[i].FN)
 			links[i].Free()
 			links[i] = nil
 		}
@@ -299,6 +351,7 @@ func (adm *Adm) File(pdu *asn.PDU) {
 	pdu.Free()
 }
 
+// handler processes pdu RxQ until EOF or kill signal
 func (adm *Adm) handler() {
 	var (
 		err error
@@ -307,22 +360,23 @@ func (adm *Adm) handler() {
 		id  asn.Id
 	)
 	defer func() {
+		adm.asn.Diag("handler", err)
 		adm.doneCh <- err
 	}()
+	adm.asn.Diag("handler...")
 	for err == nil {
-		for pdu == nil {
-			select {
-			case pdu = <-adm.asn.RxQ:
-				if pdu == nil {
-					err = io.EOF
-					return
-				}
-			case <-adm.sigCh:
-				adm.asn.SetStateClosed()
+		select {
+		case pdu = <-adm.asn.RxQ:
+			if pdu == nil {
 				err = io.EOF
 				return
 			}
+		case <-adm.sigCh:
+			adm.asn.SetStateClosed()
+			err = io.EOF
+			return
 		}
+		adm.asn.Diagf("handle %p\n", pdu)
 		if err = pdu.Open(); err != nil {
 			return
 		}
@@ -332,18 +386,17 @@ func (adm *Adm) handler() {
 		}
 		id.ReadFrom(pdu)
 		id.Internal(v)
-		asn.Diag.Println("handle", id)
+		adm.asn.Diag("handle", id)
 		switch id {
 		case asn.AckReqId:
 			err = adm.asn.Acker.Rx(pdu)
 		case asn.BlobId:
 			adm.File(pdu)
 		default:
-			asn.Diag.Println(adm.asn.Name, id)
+			adm.asn.Diag(id)
 			err = asn.ErrUnsupported
 		}
 		pdu.Free()
-		pdu = nil
 	}
 }
 
@@ -353,4 +406,14 @@ func (adm *Adm) IsAdmin(key *asn.EncrPub) bool {
 
 func (adm *Adm) IsService(key *asn.EncrPub) bool {
 	return *key == *adm.config.Keys.Server.Pub.Encr
+}
+
+func (adm *Adm) script(r io.Reader) error {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		if err := adm.cmdLine(scanner.Text()); err != nil {
+			return err
+		}
+	}
+	return scanner.Err()
 }

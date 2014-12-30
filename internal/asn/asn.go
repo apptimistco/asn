@@ -54,8 +54,10 @@ type pdubox struct {
 }
 
 type ASN struct {
-	// Name of session that's prefaced to trace logs and diagnostics
-	Name string
+	// Names of session that's prefaced to trace logs and diagnostics
+	Name struct {
+		Local, Remote, Session string
+	}
 	// Version adapts to peer
 	version Version
 	// State may be { opened, established, suspended, quitting }
@@ -92,7 +94,6 @@ func NewASN() (asn *ASN) {
 	case asn = <-asnPool:
 	default:
 		asn = &ASN{
-			Name:    "unnamed",
 			version: Latest,
 			RxQ:     make(chan *PDU, 4),
 			txq:     make(chan pdubox, 4),
@@ -149,7 +150,9 @@ flush: // flush queues
 			break flush
 		}
 	}
-	asn.Name = ""
+	asn.Name.Local = ""
+	asn.Name.Remote = ""
+	asn.Name.Session = ""
 	select {
 	case asnPool <- asn:
 	default:
@@ -177,9 +180,9 @@ func (asn *ASN) pdurx() {
 		pdu.Free()
 		asn.RxQ <- nil
 		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-			Diag.Println(asn.Name, err)
+			asn.Diag("pdurx", err)
 		} else {
-			Diag.Println(asn.Name, "Quit")
+			asn.Diag("pdurx", "quit")
 		}
 	}()
 	for {
@@ -193,7 +196,7 @@ func (asn *ASN) pdurx() {
 			panic(ErrTooLarge)
 		}
 		if pdu.File != nil && pdu.PB != nil {
-			Diag.Printf("oops pdu %p\n", pdu)
+			asn.Diag("oops pdu %p\n", pdu)
 		}
 		asn.rxRed = asn.rxRed[:0]
 		_, err = asn.Read(asn.rxRed[:n])
@@ -207,11 +210,11 @@ func (asn *ASN) pdurx() {
 		}
 		_, err = pdu.Write(b)
 		if err != nil {
-			Diag.Println("pdu.Write:", err)
+			asn.Diag("pdu.Write:", err)
 			panic(err)
 		}
 		if (l & MoreFlag) == 0 {
-			Diag.Printf("RXQ pdu %p; len %d\n", pdu, pdu.Len())
+			asn.Diagf("RXQ %p; len %d\n", pdu, pdu.Len())
 			asn.RxQ <- pdu
 			pdu = NewPDUBuf()
 		} else if pdu.PB != nil {
@@ -223,7 +226,7 @@ func (asn *ASN) pdurx() {
 			pdu.File.Write(pdu.PB.Bytes())
 			pdu.PB.Free()
 			pdu.PB = nil
-			Diag.Printf("Extend %p to %s\n", pdu, pdu.FN)
+			asn.Diagf("extend %p into %s\n", pdu, pdu.FN)
 		}
 	}
 }
@@ -236,13 +239,22 @@ func (asn *ASN) pdutx() {
 		err error
 		pb  pdubox
 	)
-pduLoop:
+	defer func() {
+		if perr := recover(); perr != nil {
+			err = perr.(error)
+		}
+		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+			asn.Diag("pdutx", err)
+		} else {
+			asn.Diag("pdutx", "quit")
+		}
+	}()
 	for {
 		if pb = <-asn.txq; pb.pdu == nil {
-			break pduLoop
+			return
 		}
 		if err = pb.pdu.Open(); err != nil {
-			break pduLoop
+			return
 		}
 	segLoop:
 		for {
@@ -273,34 +285,22 @@ pduLoop:
 			if _, err = asn.Write(b); err != nil {
 				break segLoop
 			}
-			Diag.Printf("Tx pdu %p; len %d\n", pb.pdu,
-				l & ^MoreFlag)
+			asn.Diagf("tx pdu %p; len %d\n", pb.pdu, l & ^MoreFlag)
 		}
 		pb.pdu.Free()
 		pb.pdu = nil
 		pb.box = nil
 		if err != nil {
-			break pduLoop
+			return
 		}
 		if asn.IsQuitting() {
 			v := Version(asn.txBlack[0])
 			id := Id(asn.txBlack[1])
 			if id.Internal(v); id == AckReqId {
-				break pduLoop
+				return
 			}
 		}
 	}
-	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-		Diag.Println(asn.Name, "Error:", err)
-	} else {
-		Diag.Println(asn.Name, "Quit")
-	}
-}
-
-// Println formats the given operands with space separation to the log ring
-// prefixed by the ASN session Name.
-func (asn *ASN) Println(a ...interface{}) (n int, err error) {
-	return Println(append([]interface{}{asn.Name}, a...)...)
 }
 
 // Read full buffer from asn.conn unless preempted with state == closed.
@@ -350,12 +350,12 @@ func (asn *ASN) SetVersion(v Version) {
 func (asn *ASN) Tx(pdu *PDU) {
 	if pdu.FN != "" {
 		if pdu.File != nil {
-			Diag.Println("Tx", pdu.FN, "size", pdu.Size())
+			asn.Diag("tx", pdu.FN, "size", pdu.Size())
 		} else {
-			Diag.Println("Tx", pdu.FN)
+			asn.Diag("tx", pdu.FN)
 		}
 	} else {
-		Diag.Printf("Tx %x\n", pdu.PB.Bytes())
+		asn.Diagf("tx %x\n", pdu.PB.Bytes())
 	}
 	asn.txq <- pdubox{pdu: pdu, box: asn.box}
 }

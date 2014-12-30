@@ -40,13 +40,16 @@ func (adm *Adm) Exec(args ...string) (err error) {
 			break
 		}
 	}
-	asn.Diag.Println(adm.asn.Name, asn.ExecReqId, strings.Join(args, " "))
+	adm.asn.Diag(asn.ExecReqId, strings.Join(args, " "))
 	ackCh := make(chan error, 1)
 	adm.asn.Acker.Map(req, func(req asn.Requester, ack *asn.PDU) error {
 		adm.asn.Acker.UnMap(req)
 		err := adm.asn.ParseAckError(ack)
 		if err == nil {
+			adm.asn.Diag("ack")
 			ack.WriteTo(Stdout)
+		} else {
+			adm.asn.Diag("nack", err)
 		}
 		ackCh <- err
 		return nil
@@ -68,18 +71,18 @@ func (adm *Adm) Login() (err error) {
 	req.WriteTo(login)
 	login.Write(key[:])
 	login.Write(sig[:])
-	asn.Diag.Println(adm.asn.Name, asn.LoginReqId, key.String()[:8]+"...",
+	adm.asn.Diag(asn.LoginReqId, key.String()[:8]+"...",
 		sig.String()[:8]+"...")
 	ackCh := make(chan error, 1)
 	adm.asn.Acker.Map(req, func(req asn.Requester, ack *asn.PDU) error {
-		asn.Diag.Println("rx ack of", req)
+		adm.asn.Diag("rx ack of", req)
 		adm.asn.Acker.UnMap(req)
 		err := adm.asn.ParseAckError(ack)
 		if err == nil {
-			asn.Diag.Println("login rekey...")
+			adm.asn.Diag("login rekey")
 			adm.rekey(ack)
 		} else {
-			asn.Diag.Println("login error", err)
+			adm.asn.Diag("login", err)
 		}
 		ackCh <- err
 		return nil
@@ -97,7 +100,7 @@ func (adm *Adm) Pause() (err error) {
 	asn.PauseReqId.Version(v).WriteTo(pause)
 	req := asn.NewRequesterString("pause")
 	req.WriteTo(pause)
-	asn.Diag.Println(adm.asn.Name, asn.PauseReqId)
+	adm.asn.Diag(asn.PauseReqId)
 	ackCh := make(chan error, 1)
 	adm.asn.Acker.Map(req, func(req asn.Requester, ack *asn.PDU) error {
 		adm.asn.Acker.UnMap(req)
@@ -119,8 +122,8 @@ func (adm *Adm) rekey(pdu *asn.PDU) {
 	var nonce asn.Nonce
 	pdu.Read(peer[:])
 	pdu.Read(nonce[:])
-	asn.Diag.Println("new key:", peer)
-	asn.Diag.Println("new nonce:", nonce)
+	adm.asn.Diag("new key:", peer)
+	adm.asn.Diag("new nonce:", nonce)
 	adm.asn.SetBox(asn.NewBox(2, &nonce, &peer,
 		adm.ephemeral.pub, adm.ephemeral.sec))
 	adm.asn.SetStateEstablished()
@@ -133,7 +136,7 @@ func (adm *Adm) Resume() (err error) {
 	asn.ResumeReqId.Version(v).WriteTo(resume)
 	req := asn.NewRequesterString("resume")
 	req.WriteTo(resume)
-	asn.Diag.Println(adm.asn.Name, asn.ResumeReqId)
+	adm.asn.Diag(asn.ResumeReqId)
 	ackCh := make(chan error, 1)
 	adm.asn.Acker.Map(req, func(req asn.Requester, ack *asn.PDU) error {
 		adm.asn.Acker.UnMap(req)
@@ -157,7 +160,7 @@ func (adm *Adm) Quit() (err error) {
 	asn.QuitReqId.Version(v).WriteTo(quit)
 	req := asn.NewRequesterString("quit")
 	req.WriteTo(quit)
-	asn.Diag.Println(adm.asn.Name, asn.QuitReqId)
+	adm.asn.Diag(asn.QuitReqId)
 	adm.asn.SetStateQuitting()
 	ackCh := make(chan error, 1)
 	adm.asn.Acker.Map(req, func(req asn.Requester, ack *asn.PDU) error {

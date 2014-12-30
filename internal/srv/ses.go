@@ -7,10 +7,11 @@ package srv
 import (
 	"bufio"
 	"crypto/rand"
-	"github.com/apptimistco/asn/internal/asn"
 	"os"
 	"strings"
 	"syscall"
+
+	"github.com/apptimistco/asn/internal/asn"
 )
 
 type Ses struct {
@@ -95,6 +96,7 @@ func (ses *Ses) dist(pdus []*asn.PDU) {
 // Free the Ses by pooling or release it to GC if pool is full.
 func (ses *Ses) Free() {
 	if ses != nil {
+		ses.name = ""
 		ses.ASN.Free()
 		ses.ASN = nil
 		ses.srv = nil
@@ -145,7 +147,7 @@ func (ses *Ses) removals(pdus []*asn.PDU) {
 		scanner := bufio.NewScanner(f)
 		for scanner.Scan() {
 			fn := ses.srv.repos.Join(scanner.Text())
-			asn.Diag.Println("unlinked", fn)
+			ses.ASN.Diag("unlinked", fn)
 			syscall.Unlink(fn)
 		}
 		scanner = nil
@@ -193,24 +195,24 @@ func (ses *Ses) RxLogin(pdu *asn.PDU) (err error) {
 	case ses.Keys.Client.Login.Equal(ses.srv.Config.Keys.Admin.Pub.Encr):
 		if sig.Verify(ses.srv.Config.Keys.Admin.Pub.Auth,
 			ses.Keys.Client.Login[:]) {
-			ses.ASN.Name = ses.srv.Config.Name + "[Admin]"
+			ses.ASN.Name.Remote = "admin"
 			err = nil
 		}
 	case ses.Keys.Client.Login.Equal(ses.srv.Config.Keys.Server.Pub.Encr):
 		if sig.Verify(ses.srv.Config.Keys.Server.Pub.Auth,
 			ses.Keys.Client.Login[:]) {
-			ses.ASN.Name = ses.srv.Config.Name + "[Server]"
+			ses.ASN.Name.Remote = "server"
 			err = nil
 		}
 	default:
-		user := ses.srv.repos.Users.Search(ses.Keys.Client.Login.String())
-		if user != nil &&
-			sig.Verify(&user.ASN.Auth, ses.Keys.Client.Login[:]) {
-			ses.ASN.Name = ses.srv.Config.Name + "[" +
-				ses.Keys.Client.Login.String()[:8] + "]"
+		login := ses.Keys.Client.Login
+		user := ses.srv.repos.Users.Search(login)
+		if user != nil && sig.Verify(&user.ASN.Auth, login[:]) {
+			ses.ASN.Name.Remote = login.String()[:8]
 			err = nil
 		}
 	}
+	ses.ASN.Name.Session = ses.ASN.Name.Local + ":" + ses.ASN.Name.Remote
 	if err != nil {
 		ses.ASN.Println("login", err)
 	} else {

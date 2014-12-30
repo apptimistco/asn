@@ -22,3 +22,11 @@ func init() {
 	}
 	Diag = log.New(f, "", log.Lshortfile)
 }
+
+func (asn *ASN) Diag(v ...interface{}) {
+	Diag.Output(2, asn.Name.Session+" "+fmt.Sprintln(v...))
+}
+
+func (asn *ASN) Diagf(format string, v ...interface{}) {
+	Diag.Output(2, asn.Name.Session+" "+fmt.Sprintf(format, v...))
+}

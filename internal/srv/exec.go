@@ -136,8 +136,7 @@ func (ses *Ses) RxExec(pdu *asn.PDU) error {
 	} else {
 		args = strings.Split(string(cmd[:n]), "\x00")
 	}
-	ses.ASN.Println("exec", strings.Join(args, " "))
-	asn.Diag.Printf("%p\n", pdu)
+	ses.ASN.Diagf("exec pdu %p: %v\n", pdu, args)
 	go ses.GoExec(req, pdu, args...)
 	return nil
 }

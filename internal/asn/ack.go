@@ -91,19 +91,19 @@ func (asn *ASN) Ack(req Requester, argv ...interface{}) {
 	AckReqId.Version(v).WriteTo(ack)
 	req.WriteTo(ack)
 	if err != nil {
-		Trace(asn.Name, "Tx", AckReqId, req, err)
+		asn.Trace("tx", AckReqId, req, err)
 		ErrFromError(err).Version(v).WriteTo(ack)
 		if len(argv) > 0 {
 			AckOut(ack, argv...)
 		} else {
 			ack.Write([]byte(err.Error()))
 		}
-		Diag.Println("Nack")
+		asn.Diag("nack")
 	} else {
-		Trace(asn.Name, "Tx", AckReqId, req, Success)
+		asn.Trace("tx", AckReqId, req, Success)
 		Success.Version(v).WriteTo(ack)
 		AckOut(ack, argv...)
-		Diag.Println("Ack")
+		asn.Diag("ack")
 	}
 	asn.Tx(ack)
 }

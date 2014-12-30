@@ -5,12 +5,9 @@
 package adm
 
 import (
-	"fmt"
-	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 
 	"github.com/tgrennan/go-gnureadline"
@@ -22,10 +19,10 @@ func (adm *Adm) cli() error {
 	term := os.Getenv("TERM")
 	history := filepath.Join(home, ".asnadm_history")
 	rc := filepath.Join(home, ".asnadmrc")
-	if adm.asn.Name == "" {
+	if adm.asn.Name.Session == "" {
 		prompt = "asnadm: "
 	} else {
-		prompt = adm.asn.Name + ": "
+		prompt = adm.asn.Name.Session + ": "
 	}
 	if _, err := os.Stat(history); err == nil {
 		gnureadline.ReadHistory(history)
@@ -55,22 +52,11 @@ func (adm *Adm) cli() error {
 	for {
 		line, err := gnureadline.Readline(prompt, true)
 		if err != nil {
-			if err == io.EOF {
-				err = nil
-			}
 			return err
 		}
-		args := strings.Split(line, " ")
-		if len(args) == 0 {
-			continue
-		}
-		switch args[0] {
-		case "quit":
-			return nil
-		default:
-			if err = adm.Exec(args...); err != nil {
-				fmt.Println(err)
-			}
+		err = adm.cmdLine(line)
+		if err != nil {
+			return err
 		}
 	}
 }

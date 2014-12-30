@@ -35,15 +35,15 @@ keys:
       auth: {{.Server.Pub.Auth}}
   nonce: {{.Nonce}}
 server:
-- name: Local
+- name: sf.sock
   url: unix:///siren-sf.sock
   lat: 181
   lon: 0
-- name: San Francisco
+- name: sf.ws
   url: ws://localhost:6969/asn/siren.ws
   lat: 37.774929
   lon: -122.419415
-- name: Los Angeles
+- name: la.ws
   url: ws://la.siren.apptimist.co/ws/siren/
   lat: 34.052234
   lon: -118.243684

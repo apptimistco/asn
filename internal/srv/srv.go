@@ -255,8 +255,6 @@ func (srv *Server) handler(conn net.Conn) {
 		ses.ASN = nil
 		srv.Free(ses)
 	}()
-	ses.ASN.Repos = srv.repos
-	ses.ASN.Name = srv.Config.Name + "[unnamed]"
 	ses.ASN.SetConn(conn)
 	conn.Read(ses.Keys.Client.Ephemeral[:])
 	ses.ASN.Println("connected",
@@ -285,7 +283,6 @@ func (srv *Server) handler(conn net.Conn) {
 		}
 		id.ReadFrom(pdu)
 		id.Internal(v)
-		asn.Diag.Println("Rx", id)
 		switch id {
 		case asn.AckReqId:
 			err = ses.ASN.Acker.Rx(pdu)
@@ -460,6 +457,10 @@ func (srv *Server) newSes() (ses *Ses) {
 	ses = NewSes()
 	srv.sessions = append(srv.sessions, ses)
 	ses.srv = srv
+	ses.ASN.Repos = srv.repos
+	ses.ASN.Name.Local = srv.Config.Name
+	ses.ASN.Name.Remote = "unnamed"
+	ses.ASN.Name.Session = ses.ASN.Name.Local + ":" + ses.ASN.Name.Remote
 	srv.mutex.Unlock()
 	return
 }
@@ -512,7 +513,7 @@ func (l *srvListener) listen(srv *Server) {
 				go srv.handler(conn)
 			} else if opErr, ok := err.(*net.OpError); !ok ||
 				!opErr.Timeout() {
-				asn.Println("Accept error:", err)
+				asn.Diag.Println("accept", err)
 			}
 		}
 	}
