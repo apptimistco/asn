@@ -161,7 +161,7 @@ The ASN protocol has very few states.
 ## Identifiers ##
 To support flexible protocol evolution, the App and Service use lookup tables
 to map PDU identifier and error codes. Here are the most recent identifiers:
-<!-- go test -v -run Ids github.com/apptimistco/asn -->
+<!-- import: asn -show-ids -->
 
                          Version
                             0
@@ -185,7 +185,7 @@ Each request is acknowledged by this `AckReq`.
     data = []uint8
 
 Where `result` is one of these codes.
-<!-- go test -v -run Errs github.com/apptimistco/asn -->
+<!-- import: asn -show-errors -->
 
                          Version
                             0

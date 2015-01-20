@@ -2,18 +2,12 @@
 *.swp
 /*.patch
 
-# ASN test build, config and generated files
-asnadm
-!/asnadm
-asnkeys
-!/asnkeys
-asnsrv
-!/asnsrv
-*.yaml
-*.test
-*.pprof
-*.asn
-*.diag
-*.log
-*.pid
-*.sock
+# ASN build and test files
+/asn
+/asn.test
+/asn.pprof
+/*.diag
+/*.log
+/*.yaml
+/*.asn
+/*.sock

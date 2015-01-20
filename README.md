@@ -3,7 +3,7 @@ this [RFC]( https://github.com/apptimistco/rfc/blob/master/asn.md).
 
 Fetch `asn` and its dependencies with GO tool.
 
-    go get -t -u github.com/apptimistco/asn
+    go get -u github.com/apptimistco/asn
 
 (See the [MacOS](#macos) section for running `asn` on that instead of Linux)
 
@@ -26,29 +26,30 @@ Run the package tests.
 
     go test github.com/apptimistco/asn
 
-Install the server, admin, and key generation programs.
+Run the tests with diagnostics written to `test.diag`.
 
-    go install github.com/apptimistco/asn/asnsrv
-    go install github.com/apptimistco/asn/asnadm
-    go install github.com/apptimistco/asn/asnkeys
+    go test -tags diag github.com/apptimistco/asn
+
+Build the `asn` command.
+
+    go build github.com/apptimistco/asn
+
+Build `asn` with diagnostics.
+
+    go build -tags diag github.com/apptimistco/asn
 
 Generate keys and hack a config.
 
-    asnkeys > keys.yaml
-    cp ~/src/github.com/apptimistco/asn/tests/siren-sf.yaml .
-    cp ~/src/github.com/apptimistco/asn/tests/siren-adm.yaml .
-    editor siren-sf.yaml
-    editor siren-adm.yaml
+    asn -new-keys > keys.yaml
+    cp ~/src/github.com/apptimistco/asn/test-sf.yaml .
+    cp ~/src/github.com/apptimistco/asn/test-adm.yaml .
+    editor test-sf.yaml
+    editor test-adm.yaml
 
-Run the server and test with the admin program.
+Run and test.
 
-    asnsrv siren-sf &
-    asnadm siren-adm echo hello world
-
-Import `asn` or the versioned package into another package like this.
-
-    import "github.com/apptimistco/asn"
-    import "gopkg.in/apptimistco/asn.v0"
+    asn -config test-sf &
+    asn -config test-adm echo hello world
 
 [![GoDoc](https://godoc.org/github.com/apptimistco/asn?status.png)](
 https://godoc.org/github.com/apptimistco/asn)
