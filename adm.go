@@ -9,14 +9,9 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
-	"os/signal"
-	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
-	"github.com/tgrennan/go-gnureadline"
 	"golang.org/x/net/websocket"
 )
 
@@ -47,7 +42,7 @@ func (cmd *Command) Admin(args ...string) {
 			err = adm.Exec(args...)
 		}
 	} else {
-		err = adm.cli()
+		err = adm.CLI()
 	}
 	if err == io.EOF {
 		err = nil
@@ -151,54 +146,6 @@ func (adm *Adm) cmdLine(line string) error {
 		}
 	}
 	return nil
-}
-
-func (adm *Adm) cli() error {
-	var prompt string
-	home := os.Getenv("HOME")
-	term := os.Getenv("TERM")
-	history := filepath.Join(home, ".asnadm_history")
-	rc := filepath.Join(home, ".asnadmrc")
-	if adm.asn.Name.Session == "" {
-		prompt = "asnadm: "
-	} else {
-		prompt = adm.asn.Name.Session + ": "
-	}
-	if _, err := os.Stat(history); err == nil {
-		gnureadline.ReadHistory(history)
-	}
-	if _, err := os.Stat(rc); err == nil {
-		gnureadline.ReadInitFile(rc)
-	}
-	gnureadline.StifleHistory(16)
-	winch := make(chan os.Signal, 1)
-	winchStop := make(chan bool, 1)
-	signal.Notify(winch, syscall.SIGWINCH)
-	defer signal.Stop(winch)
-	go func() {
-		for {
-			select {
-			case <-winch:
-				gnureadline.Rl_resize_terminal()
-			case <-winchStop:
-				return
-			}
-		}
-	}()
-	defer func() {
-		winchStop <- true
-		gnureadline.Rl_reset_terminal(term)
-	}()
-	for {
-		line, err := gnureadline.Readline(prompt, true)
-		if err != nil {
-			return err
-		}
-		err = adm.cmdLine(line)
-		if err != nil {
-			return err
-		}
-	}
 }
 
 // Connect to the si'th server listed in the configuration.
