@@ -204,7 +204,7 @@ func (ses *Ses) RxLogin(pdu *PDU) (err error) {
 		}
 	default:
 		login := ses.Keys.Client.Login
-		user := ses.srv.repos.Users.Search(login)
+		user := ses.srv.repos.Users.Search(&login)
 		if user != nil && sig.Verify(&user.ASN.Auth, login[:]) {
 			ses.ASN.Name.Remote = login.String()[:8]
 			err = nil
