@@ -611,7 +611,7 @@ A location mark is a blob named `asn/mark` with this CONTENT.
     place = [7]uint8	// first 7 bytes of USER, PLACE, or EVENT key
 
     lat = int32		// latitude (degree millionths)
-    lon = float64	// longitude (")
+    lon = int32		// longitude (")
 
 To check-in or note that it is in transit to an event the device exec's the
 mark command for the server to create, process and distribute the first form
