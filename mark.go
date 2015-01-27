@@ -17,7 +17,7 @@ const (
 	MarkSz        = 8
 	MarkeySz      = 8
 	MarkETAMask   = uint8(0x0f)
-	MarkPlaceMask = uint8(0x70)
+	MarkPlaceMask = uint8(0xf0)
 	MarkPlaceFlag = uint8(0x70)
 	MarkPlaceSz   = 7
 	MDegree       = 1000000
