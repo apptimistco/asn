@@ -638,6 +638,7 @@ func (ses *Ses) ExecNewUser(args ...string) interface{} {
 	if len(args) != 1 {
 		return ErrUsageNewUser
 	}
+	isBinary := args[0] == "-b";
 	author := ses.srv.repos.Users.Search(&ses.Keys.Client.Login)
 	owner := author
 	defer func() {
@@ -652,13 +653,13 @@ func (ses *Ses) ExecNewUser(args ...string) interface{} {
 		q.Clean()
 		q = nil
 	}()
-	out, err := yaml.Marshal(q)
-	if err != nil {
-		return err
-	}
 	owner, err = ses.srv.repos.NewUser(q.Pub.Encr.String())
 	if err != nil {
 		return err
+	}
+	/* Eliot wrong code. */
+	if author == nil {
+		author = owner
 	}
 	v := ses.NewBlob(owner, author, "asn/auth", []byte(q.Pub.Auth[:]))
 	if err, _ := v.(error); err != nil {
@@ -668,7 +669,18 @@ func (ses *Ses) ExecNewUser(args ...string) interface{} {
 	if err, _ := v.(error); err != nil {
 		return err
 	}
-	return out
+	// copy author also?
+	copy (owner.ASN.Auth[:], q.Pub.Auth[:])
+	if isBinary {
+		// Ack 2 secret keys for new user in binary.
+		return append (q.Sec.Encr[:], q.Sec.Auth[:]...);
+	} else {
+		out, err := yaml.Marshal(q)
+		if err != nil {
+			return err
+		}
+		return out
+	}
 }
 
 func (ses *Ses) ExecObjDump(r io.Reader, args ...string) interface{} {
