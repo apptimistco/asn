@@ -579,6 +579,8 @@ func (ses *Ses) ExecLS(req Requester,
 	return ack
 }
 
+// ExecMark without args (or just -u USER) sets the login or given
+// user sets mark to an ephemeral place.
 func (ses *Ses) ExecMark(args ...string) interface{} {
 	author := ses.srv.repos.Users.Search(&ses.Keys.Client.Login)
 	owner := author
@@ -616,11 +618,10 @@ func (ses *Ses) ExecMark(args ...string) interface{} {
 			return err
 		}
 	} else {
-		syscall.Unlink(ses.srv.repos.Expand(owner.String, "asn/mark"))
-		syscall.Unlink(ses.srv.repos.Expand(owner.String,
-			"asn/mark-server"))
-		owner.ASN.MarkServer = ""
-		return nil
+		place := &ses.Keys.Client.Ephemeral
+		if err := m.SetPlace(owner.Key, place, "70"); err != nil {
+			return err
+		}
 	}
 	v := ses.NewBlob(owner, author, "asn/mark", m)
 	if err, _ := v.(error); err != nil {

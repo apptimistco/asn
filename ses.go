@@ -226,6 +226,7 @@ func (ses *Ses) RxPause(pdu *PDU) error {
 	var req Requester
 	req.ReadFrom(pdu)
 	ses.ASN.Println("suspending")
+	ses.ExecMark()
 	ses.ASN.Ack(req)
 	ses.ASN.SetStateSuspended()
 	return nil
@@ -235,6 +236,7 @@ func (ses *Ses) RxQuit(pdu *PDU) error {
 	var req Requester
 	req.ReadFrom(pdu)
 	ses.ASN.Println("quitting")
+	ses.ExecMark()
 	ses.ASN.Ack(req)
 	ses.ASN.SetStateQuitting()
 	return nil
