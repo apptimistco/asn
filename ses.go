@@ -61,7 +61,8 @@ func (ses *Ses) DN() string { return ses.srv.cmd.Cfg.Dir }
 // other named blob named REPOS/USER/PATH goes to the associated USER sessions.
 func (ses *Ses) dist(pdus []*PDU) {
 	ses.srv.ForEachSession(func(x *Ses) {
-		if x == ses {
+		if x == nil || x == ses || x.ASN == nil ||
+			!x.ASN.IsEstablished() {
 			return
 		}
 		login := x.Keys.Client.Login
