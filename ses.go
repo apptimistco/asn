@@ -76,9 +76,10 @@ func (ses *Ses) dist(pdus []*PDU) {
 		}
 		for _, pdu := range pdus[1:] {
 			if pdu != nil {
-				suser, _ := x.srv.repos.ParsePath(pdu.FN)
-				if suser != "" &&
-					suser == slogin[:len(suser)] {
+				suser, fn := x.srv.repos.ParsePath(pdu.FN)
+				if fn == "asn/mark" ||
+					(suser != "" &&
+						suser == slogin[:len(suser)]) {
 					x.ASN.Tx(pdu)
 					// be sure to send only one per session
 					return
