@@ -57,7 +57,7 @@ func SesPoolFlush() {
 func (ses *Ses) DN() string { return ses.srv.cmd.Cfg.Dir }
 
 // dist pdu list to online sessions. Any sessions to other servers receive the
-// first link which is the RESPO/SHA. All user sessions receive "asn/mark". Any
+// first link which is the REPOS/SHA. All user sessions receive "asn/mark". Any
 // other named blob named REPOS/USER/PATH goes to the associated USER sessions.
 func (ses *Ses) dist(pdus []*PDU) {
 	ses.srv.ForEachSession(func(x *Ses) {
