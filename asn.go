@@ -348,6 +348,10 @@ func (asn *ASN) SetVersion(v Version) {
 
 // Queue PDU for segmentation, encryption and transmission
 func (asn *ASN) Tx(pdu *PDU) {
+	if asn == nil {
+		Diag.Output(2, "tried to Tx on closed ASN")
+		return
+	}
 	if pdu.FN != "" {
 		if pdu.File != nil {
 			asn.Diag("tx", pdu.FN, "size", pdu.Size())
