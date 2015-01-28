@@ -35,7 +35,7 @@ const (
 	UsageIam     = `iam NAME`
 	UsageLS      = `ls [BLOB...]`
 	UsageMark    = `mark [-u USER] [LATITUDE LONGITUDE | 7?PLACE]`
-	UsageNewUser = `newuser <"actual"|"bridge"|"forum"|"place">`
+	UsageNewUser = `newuser [-b] <"actual"|"bridge"|"forum"|"place">`
 	UsageObjDump = `objdump BLOB...`
 	UsageRM      = `rm BLOB...`
 	UsageTrace   = `trace [COMMAND [ARG]]`
@@ -635,12 +635,15 @@ func (ses *Ses) ExecMark(args ...string) interface{} {
 }
 
 func (ses *Ses) ExecNewUser(args ...string) interface{} {
-	if len(args) != 1 {
+	if len(args) < 1 {
 		return ErrUsageNewUser
 	}
 	isBinary := args[0] == "-b"
 	if isBinary {
 		args = args[1:]
+	}
+	if len(args) != 1 {
+		return ErrUsageNewUser
 	}
 	author := ses.srv.repos.Users.Search(&ses.Keys.Client.Login)
 	owner := author

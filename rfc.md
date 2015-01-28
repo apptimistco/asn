@@ -439,7 +439,7 @@ A mark command without LATITUDE and LOGITUDE or PLACE will remove an earlier
 mark.
 
 ### newuser ###
-    newuser <"actual"|"bridge"|"forum"|"place">
+    newuser [-b] <"actual"|"bridge"|"forum"|"place">
 
 The device may exec this command in the `established` state to create an
 actual, bridge or forum user with random keys. The acknowledgment has a string
@@ -457,6 +457,17 @@ Before acknowledgment the server creates blobs named:
     asn/author
     asn/auth
     asn/user
+
+With the `-b` flag, the acknowledgement is a binary concatenation of the
+following:
+
+    PubEncrKey[:]
+    PubAuthKey[:]
+    SecEncrKey[:]
+    SecAuthKey[:32]
+
+With `SecAuthKey` truncated to the first 32 bytes thus removing the redundant
+permutation of the permuted PubAuthKey at its tail.
 
 It's up to the App to securely store and distribute the secrete encryption and
 authentication keys.
