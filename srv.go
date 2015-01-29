@@ -91,13 +91,15 @@ func (cmd *Command) Server(args ...string) {
 			for {
 				sig := <-srv.cmd.Sig
 				Diag.Println("caught", sig)
-				TraceFlush(Diag)
 				if IsINT(sig) || IsTERM(sig) {
+					TraceFlush(Diag)
 					srv.Close()
-				}
-				if IsINT(sig) {
-					srv.Hangup()
-					break
+					if IsINT(sig) {
+						srv.Hangup()
+						break
+					}
+				} else if IsUSR1(sig) {
+					TraceFlush(Log)
 				}
 			}
 			Log.Println("stopped", cmd.Cfg.Name)

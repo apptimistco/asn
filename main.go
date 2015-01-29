@@ -163,7 +163,10 @@ func main() {
 	}
 	cmd.Sig = make(Sig, 1)
 	cmd.Done = make(Done, 1)
-	signal.Notify(cmd.Sig, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(cmd.Sig,
+		syscall.SIGINT,
+		syscall.SIGTERM,
+		syscall.SIGUSR1)
 	if cmd.Flag.Admin || len(cmd.Cfg.Listen) == 0 {
 		go cmd.Admin(FS.Args()...)
 	} else {
@@ -287,6 +290,8 @@ func (done Done) Wait() error { return <-done }
 
 func (sig Sig) INT()  { sig <- syscall.SIGINT }
 func (sig Sig) TERM() { sig <- syscall.SIGTERM }
+func (sig Sig) USR1() { sig <- syscall.SIGUSR1 }
 
 func IsINT(sig os.Signal) bool  { return sig == syscall.SIGINT }
 func IsTERM(sig os.Signal) bool { return sig == syscall.SIGTERM }
+func IsUSR1(sig os.Signal) bool { return sig == syscall.SIGUSR1 }
