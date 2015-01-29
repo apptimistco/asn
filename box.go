@@ -6,15 +6,13 @@ package main
 
 import (
 	"bytes"
-	"golang.org/x/crypto/nacl/box"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
+
+	"golang.org/x/crypto/nacl/box"
 )
 
 const (
-	SharedSz    = 32
-	NonceSz     = 24
 	BoxOverhead = box.Overhead
 )
 
@@ -36,8 +34,8 @@ var (
 // it's copied into the initial open and seal nonce; signature, the first
 // NouncSz bytes are copied; oterwise, it's decoded from the hexadecimal
 // string.
-func NewBox(seqLen int, nonce interface{}, peer *EncrPub,
-	pub *EncrPub, sec *EncrSec) *Box {
+func NewBox(seqLen int, nonce interface{}, peer *PubEncr,
+	pub *PubEncr, sec *SecEncr) *Box {
 	x := &Box{Key: NewSharedKey(peer, sec)}
 	x.OpenNonce, _ = Noncer(nonce)
 	x.SealNonce, _ = Noncer(nonce)
@@ -109,7 +107,7 @@ func Noncer(v interface{}) (*Nonce, error) {
 		nonce := &Nonce{}
 		copy(nonce[:], t[:NonceSz])
 		return nonce, nil
-	case *AuthSig:
+	case *Signature:
 		nonce := &Nonce{}
 		copy(nonce[:], t[:NonceSz])
 		return nonce, nil
@@ -118,8 +116,6 @@ func Noncer(v interface{}) (*Nonce, error) {
 	}
 	return nil, ErrNonce
 }
-
-type Nonce [NonceSz]byte
 
 // Inc[rement] the Box Nounce by two.
 func (x *Nonce) Inc(l int) {
@@ -143,69 +139,9 @@ func (x *Nonce) Inc(l int) {
 	}
 }
 
-// Decode the given hexadecimal character string into a new Nonce.
-func NewNonceString(s string) (*Nonce, error) {
-	b, err := DecodeStringExactly(s, NonceSz)
-	if err != nil {
-		return nil, err
-	}
-	nonce := &Nonce{}
-	copy(nonce[:], b[:])
-	return nonce, err
-}
-
-func (x *Nonce) GetYAML() (string, interface{}) {
-	if x != nil {
-		return "", x.String()
-	}
-	return "", ""
-}
-
-// Recast the Nonce to its basic type.
-func (x *Nonce) Recast() *[NonceSz]byte { return (*[NonceSz]byte)(x) }
-
-func (x *Nonce) SetYAML(t string, v interface{}) bool {
-	if s, ok := v.(string); ok && len(s) > 0 {
-		if p, err := NewNonceString(s); err == nil {
-			*x = *p
-			return true
-		}
-	}
-	return false
-}
-
-// Encode the Nonce key as a hexadecimal character string.
-func (x *Nonce) String() string {
-	return hex.EncodeToString([]byte(x[:]))
-}
-
-// Precomputed, shared box key.
-type Shared [SharedSz]byte
-
 // Precompute a shared key from the peer and secret keys.
-func NewSharedKey(peer *EncrPub, sec *EncrSec) (shared *Shared) {
+func NewSharedKey(peer *PubEncr, sec *SecEncr) (shared *Shared) {
 	shared = &Shared{}
 	box.Precompute(shared.Recast(), peer.Recast(), sec.Recast())
 	return shared
-}
-
-// Decode the given hexadecimal character string into a new Shared key.
-func NewSharedString(s string) (*Shared, error) {
-	b, err := DecodeStringExactly(s, SharedSz)
-	if err != nil {
-		return nil, err
-	}
-	shared := &Shared{}
-	copy(shared[:], b[:])
-	return shared, err
-}
-
-// Recast the Shared key to its basic type.
-func (shared *Shared) Recast() *[SharedSz]byte {
-	return (*[SharedSz]byte)(shared)
-}
-
-// Encode the Shared key as a hexadecimal character string.
-func (shared *Shared) String() string {
-	return hex.EncodeToString([]byte(shared[:]))
 }

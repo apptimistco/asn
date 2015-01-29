@@ -67,14 +67,14 @@ func (tmp *ReposTmp) NewFile() (f *os.File, err error) {
 }
 
 type ReposUser struct {
-	Key    *EncrPub
+	Key    *PubEncr
 	String string
 	ASN    struct {
-		Auth        AuthPub
-		Author      EncrPub
-		Editors     EncrPubList
-		Moderators  EncrPubList
-		Subscribers EncrPubList
+		Auth        PubAuth
+		Author      PubEncr
+		Editors     PubEncrList
+		Moderators  PubEncrList
+		Subscribers PubEncrList
 		User        string
 		MarkServer  string
 	}
@@ -150,7 +150,7 @@ func (users *ReposUsers) LS() []byte {
 	users.mutex.Lock()
 	defer users.mutex.Unlock()
 	n := len(users.Entry)
-	out := make([]byte, 0, n*((EncrPubSz*2)+1))
+	out := make([]byte, 0, n*((PubEncrSz*2)+1))
 	for _, user := range users.Entry {
 		out = append(out, []byte(user.String)...)
 		out = append(out, '\n')
@@ -173,7 +173,7 @@ func (users *ReposUsers) Search(v interface{}) (user *ReposUser) {
 			users.Entry[i].String[:lent] == t {
 			user = users.Entry[i]
 		}
-	case *EncrPub:
+	case *PubEncr:
 		i := sort.Search(n, func(i int) bool {
 			return bytes.Compare(users.Entry[i].Key[:], t[:]) >= 0
 		})
@@ -224,17 +224,60 @@ func (repos *Repos) Expand(hex string, elements ...string) string {
 }
 
 func (repos *Repos) load(user *ReposUser) {
-	user.Key = newEncrPub(user.String)
-	user.ASN.Auth.fromBlob(repos.Join(user.expand("asn/auth")))
-	user.ASN.Author.fromBlob(repos.Join(user.expand("asn/author")))
-	user.ASN.Editors.fromBlob(repos.Join(user.expand("asn/editors")))
-	user.ASN.Moderators.fromBlob(repos.Join(user.expand("asn/moderators")))
-	user.ASN.Subscribers.fromBlob(repos.Join(user.expand("asn/subscribers")))
+	user.Key, _ = NewPubEncrString(user.String)
+	repos.ReadFromBlob(&user.ASN.Auth, user.expand("asn/auth"))
+	repos.ReadFromBlob(&user.ASN.Author, user.expand("asn/author"))
+	repos.ReadListFromBlob(&user.ASN.Editors, user.expand("asn/editors"))
+	repos.ReadListFromBlob(&user.ASN.Moderators,
+		user.expand("asn/moderators"))
+	repos.ReadListFromBlob(&user.ASN.Subscribers,
+		user.expand("asn/subscribers"))
 	user.ASN.User = blobGets(repos.Join(user.expand("asn/user")))
 	if user.ASN.User == "" {
 		user.ASN.User = "actual"
 	}
 	user.ASN.MarkServer = blobGets(repos.Join(user.expand("asn/mark-server")))
+}
+
+// ReadFromBlob will panic on error so the calling function must recover.
+func (repos *Repos) ReadFromBlob(x Byter, fn string) {
+	f, err := os.Open(repos.Join(fn))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return
+		}
+		panic(err)
+	}
+	defer f.Close()
+	blobSeek(f)
+	_, err = f.Read(x.Bytes()[:])
+	if err != nil {
+		panic(err)
+	}
+	return
+}
+
+// ReadListFromBlob will panic on error so the calling function must recover.
+func (repos *Repos) ReadListFromBlob(l *PubEncrList, fn string) {
+	f, err := os.Open(repos.Join(fn))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return
+		}
+		panic(err)
+	}
+	defer f.Close()
+	pos := blobSeek(f)
+	fi, err := f.Stat()
+	if err != nil {
+		panic(err)
+	}
+	n := int(fi.Size()-pos) / PubEncrSz
+	keys := make([]PubEncr, n)
+	for i := 0; i < n; i++ {
+		f.Read(keys[i][:])
+	}
+	*l = keys
 }
 
 // File blob with v contents in repos returning file sum, name, and any error.
@@ -627,8 +670,8 @@ func (repos *Repos) newUser(v interface{}) *ReposUser {
 			return repos.Users.Entry[i].String >= t
 		})
 		user.String = t
-		user.Key = newEncrPub(user.String)
-	case *EncrPub:
+		user.Key, _ = NewPubEncrString(user.String)
+	case *PubEncr:
 		i = sort.Search(n, func(i int) bool {
 			return bytes.Compare(repos.Users.Entry[i].Key[:],
 				t[:]) >= 0
@@ -716,7 +759,7 @@ func (repos Repos) ParsePath(pn string) (usersum, remainder string) {
 }
 
 func (repos *Repos) Permission(blob *Blob, user *ReposUser,
-	admin, service, login, ephemeral *EncrPub) error {
+	admin, service, login, ephemeral *PubEncr) error {
 	if *login == *admin || *login == *service {
 		return nil
 	}
@@ -812,7 +855,7 @@ func reposIsBlob(fi os.FileInfo) bool {
 }
 
 func reposIsUser(fn string) bool {
-	return IsHex(fn) && len(fn) == 2*(EncrPubSz-1)
+	return IsHex(fn) && len(fn) == 2*(PubEncrSz-1)
 }
 
 // reposLN creates directories if required then hard links dst with src.

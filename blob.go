@@ -21,7 +21,7 @@ const (
 	BlobMagic      = "asnmagic"
 	BlobMagicSz    = len(BlobMagic)
 	BlobRandomSz   = 32
-	BlobKeysSz     = 2 * EncrPubSz
+	BlobKeysSz     = 2 * PubEncrSz
 	BlobTimeOff    = BlobOff + int64(BlobMagicSz+BlobRandomSz+BlobKeysSz)
 	BlobTimeSz     = 8
 	BlobNameLenOff = BlobTimeOff + int64(BlobTimeSz)
@@ -129,8 +129,8 @@ func blobSeek(r io.ReadSeeker) int64 {
 }
 
 type Blob struct {
-	Owner  EncrPub
-	Author EncrPub
+	Owner  PubEncr
+	Author PubEncr
 	Time   time.Time
 	Name   string
 }
@@ -145,7 +145,7 @@ func BlobPoolFlush() {
 	}
 }
 
-func NewBlob(owner, author *EncrPub, name string) (blob *Blob) {
+func NewBlob(owner, author *PubEncr, name string) (blob *Blob) {
 	select {
 	case blob = <-BlobPool:
 	default:

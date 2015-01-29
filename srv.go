@@ -55,18 +55,18 @@ func (cmd *Command) Server(args ...string) {
 		goto egress
 	}
 	defer srv.repos.Free()
-	for _, q := range []*Quad{
+	for _, k := range []*UserKeys{
 		srv.cmd.Cfg.Keys.Admin,
 		srv.cmd.Cfg.Keys.Server,
 	} {
-		user := srv.repos.Users.Search(q.Pub.Encr)
+		user := srv.repos.Users.Search(k.Pub.Encr)
 		if user == nil {
-			user, err = srv.repos.NewUser(q.Pub.Encr)
+			user, err = srv.repos.NewUser(k.Pub.Encr)
 			if err != nil {
 				goto egress
 			}
-			user.ASN.Auth = *q.Pub.Auth
-			user.ASN.Author = *q.Pub.Encr
+			user.ASN.Auth = *k.Pub.Auth
+			user.ASN.Author = *k.Pub.Encr
 		}
 		user = nil
 	}

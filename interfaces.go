@@ -5,10 +5,24 @@
 package main
 
 import (
+	"encoding/hex"
+	"errors"
 	"io"
 	"net"
+	"os"
 	"time"
 )
+
+type Byter interface {
+	Bytes() []byte
+}
+
+func Bytes(x Byter) (b []byte) {
+	if x != nil {
+		b = x.Bytes()
+	}
+	return
+}
 
 // LenReader is a wrapper of something providing io.Reader and Len()
 type LenReader interface {
@@ -49,6 +63,65 @@ type WriteStringer interface {
 type Reposer interface {
 	// Returns the repos directory name.
 	DN() string
-	IsAdmin(*EncrPub) bool
-	IsService(*EncrPub) bool
+	IsAdmin(*PubEncr) bool
+	IsService(*PubEncr) bool
+}
+
+type Sizer interface {
+	Size() int
+}
+
+func Size(x Sizer) (l int) {
+	if x != nil {
+		l = x.Size()
+	}
+	return
+}
+
+type Stringer interface {
+	String() string
+}
+
+func String(x Stringer) (s string) {
+	if x != nil {
+		return x.String()
+	}
+	return
+}
+
+type ByteSizer interface {
+	Byter
+	Sizer
+}
+
+func DecodeFromString(x ByteSizer, s string) error {
+	if x == nil {
+		return errors.New("destination is nil")
+	}
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		return err
+	}
+	if len(b) != x.Size() {
+		return os.ErrInvalid
+	}
+	copy(x.Bytes()[:], b[:])
+	return nil
+}
+
+func EncodeToString(x Byter) string {
+	return hex.EncodeToString(x.Bytes())
+}
+
+func GetYAML(x Stringer) (string, interface{}) {
+	return "", x.String()
+}
+
+func SetYAML(x ByteSizer, t string, v interface{}) bool {
+	if s, ok := v.(string); ok && len(s) > 0 {
+		if err := DecodeFromString(x, s); err != nil {
+			return true
+		}
+	}
+	return false
 }

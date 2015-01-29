@@ -72,7 +72,7 @@ func (m *Mark) ReadFrom(r io.Reader) (n int64, err error) {
 }
 
 // SETPlace USER, PLACE, "7?"
-func (m *Mark) SetPlace(user, place *EncrPub, flageta string) (err error) {
+func (m *Mark) SetPlace(user, place *PubEncr, flageta string) (err error) {
 	copy(m.Key[:], user[:MarkeySz])
 	b, err := hex.DecodeString(flageta)
 	if err != nil {
@@ -84,7 +84,7 @@ func (m *Mark) SetPlace(user, place *EncrPub, flageta string) (err error) {
 }
 
 // SetLL USER, LAT, LON
-func (m *Mark) SetLL(user *EncrPub, args ...string) (err error) {
+func (m *Mark) SetLL(user *PubEncr, args ...string) (err error) {
 	if len(args) != 2 {
 		err = os.ErrInvalid
 		return

@@ -68,8 +68,8 @@ type Adm struct {
 	cmd       *Command
 	asn       *ASN
 	ephemeral struct {
-		pub *EncrPub
-		sec *EncrSec
+		pub *PubEncr
+		sec *SecEncr
 	}
 	doneCh chan error
 }
@@ -307,11 +307,11 @@ func (adm *Adm) handler() {
 	}
 }
 
-func (adm *Adm) IsAdmin(key *EncrPub) bool {
+func (adm *Adm) IsAdmin(key *PubEncr) bool {
 	return *key == *adm.cmd.Cfg.Keys.Admin.Pub.Encr
 }
 
-func (adm *Adm) IsService(key *EncrPub) bool {
+func (adm *Adm) IsService(key *PubEncr) bool {
 	return *key == *adm.cmd.Cfg.Keys.Server.Pub.Encr
 }
 
@@ -433,7 +433,7 @@ func (adm *Adm) Pause() (err error) {
 }
 
 func (adm *Adm) rekey(pdu *PDU) {
-	var peer EncrPub
+	var peer PubEncr
 	var nonce Nonce
 	pdu.Read(peer[:])
 	pdu.Read(nonce[:])

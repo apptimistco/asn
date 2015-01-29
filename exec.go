@@ -240,14 +240,14 @@ func (ses *Ses) ExecAuth(args ...string) interface{} {
 	if len(args) != 1 {
 		return ErrUsageAuth
 	}
-	if len(args[0]) != (AuthPubSz * 2) {
+	if len(args[0]) != (PubAuthSz * 2) {
 		return os.ErrInvalid
 	}
 	authPub, err := hex.DecodeString(args[0])
 	if err != nil {
 		return err
 	}
-	if len(authPub) != AuthPubSz {
+	if len(authPub) != PubAuthSz {
 		return os.ErrInvalid
 	}
 	return ses.NewBlob(owner, author, "asn/auth", authPub)
@@ -604,7 +604,7 @@ func (ses *Ses) ExecMark(args ...string) interface{} {
 		if place == nil {
 			return ErrNOENT
 		}
-		kplace, err := NewEncrPubString(place.String)
+		kplace, err := NewPubEncrString(place.String)
 		if err != nil {
 			return err
 		}
@@ -652,22 +652,21 @@ func (ses *Ses) ExecNewUser(args ...string) interface{} {
 		author = nil
 		owner = nil
 	}()
-	q, err := NewQuad()
+	k, err := NewRandomUserKeys()
 	if err != nil {
 		return err
 	}
 	defer func() {
-		q.Clean()
-		q = nil
+		k.Free()
 	}()
-	owner, err = ses.srv.repos.NewUser(q.Pub.Encr.String())
+	owner, err = ses.srv.repos.NewUser(k.Pub.Encr.String())
 	if err != nil {
 		return err
 	}
 	if author == nil {
 		author = owner
 	}
-	v := ses.NewBlob(owner, author, "asn/auth", []byte(q.Pub.Auth[:]))
+	v := ses.NewBlob(owner, author, "asn/auth", []byte(k.Pub.Auth[:]))
 	if err, _ := v.(error); err != nil {
 		return err
 	}
@@ -680,12 +679,12 @@ func (ses *Ses) ExecNewUser(args ...string) interface{} {
 		return err
 	}
 	// copy author also?
-	copy(owner.ASN.Auth[:], q.Pub.Auth[:])
+	copy(owner.ASN.Auth[:], k.Pub.Auth[:])
 	if isBinary {
 		// Ack 2 secret keys for new user in binary.
-		return append(q.Sec.Encr[:], q.Sec.Auth[:]...)
+		return append(k.Sec.Encr[:], k.Sec.Auth[:]...)
 	}
-	out, err := yaml.Marshal(q)
+	out, err := yaml.Marshal(k)
 	if err != nil {
 		return err
 	}
@@ -721,11 +720,11 @@ func (ses *Ses) ExecObjDump(r io.Reader, args ...string) interface{} {
 		fmt.Fprintln(out, "len:", fi.Size()-pos)
 		switch blob.Name {
 		case "asn/auth":
-			var auth AuthPub
+			var auth PubAuth
 			f.Read(auth[:])
 			fmt.Fprintln(out, "asn/auth:", auth.String())
 		case "asn/author":
-			var author EncrPub
+			var author PubEncr
 			f.Read(author[:])
 			fmt.Fprintln(out, "asn/author:", author.String())
 		case MarkFN:
@@ -820,7 +819,7 @@ func (ses *Ses) ExecVouch(args ...string) interface{} {
 	if err != nil {
 		return err
 	}
-	if len(sig) != AuthSigSz {
+	if len(sig) != SignatureSz {
 		return os.ErrInvalid
 	}
 	return ses.NewBlob(owner, author, "asn/vouchers/", sig)

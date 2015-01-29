@@ -237,7 +237,7 @@ func (cmd *Command) ShowErrors() {
 }
 
 func (cmd *Command) ShowNewKeys() {
-	if k, err := NewKeys(); err != nil {
+	if k, err := NewRandomServiceKeys(); err != nil {
 		io.WriteString(os.Stderr, err.Error())
 	} else {
 		io.WriteString(cmd.Out, k.String())

@@ -18,10 +18,10 @@ type Ses struct {
 	srv  *Server
 	Keys struct {
 		Server struct {
-			Ephemeral EncrPub
+			Ephemeral PubEncr
 		}
 		Client struct {
-			Ephemeral, Login EncrPub
+			Ephemeral, Login PubEncr
 		}
 	}
 
@@ -109,11 +109,11 @@ func (ses *Ses) Free() {
 	}
 }
 
-func (ses *Ses) IsAdmin(key *EncrPub) bool {
+func (ses *Ses) IsAdmin(key *PubEncr) bool {
 	return *key == *ses.srv.cmd.Cfg.Keys.Admin.Pub.Encr
 }
 
-func (ses *Ses) IsService(key *EncrPub) bool {
+func (ses *Ses) IsService(key *PubEncr) bool {
 	return *key == *ses.srv.cmd.Cfg.Keys.Server.Pub.Encr
 }
 
@@ -182,7 +182,7 @@ func (ses *Ses) RxBlob(pdu *PDU) (err error) {
 func (ses *Ses) RxLogin(pdu *PDU) (err error) {
 	var (
 		req Requester
-		sig AuthSig
+		sig Signature
 	)
 	req.ReadFrom(pdu)
 	_, err = pdu.Read(ses.Keys.Client.Login[:])
@@ -252,6 +252,6 @@ func (ses *Ses) RxResume(pdu *PDU) error {
 	return nil
 }
 
-func (ses *Ses) Send(fn string, keys ...*EncrPub) {
+func (ses *Ses) Send(fn string, keys ...*PubEncr) {
 	// FIXME
 }

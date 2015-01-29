@@ -93,7 +93,7 @@ type Config struct {
 	} `yaml:"server,omitempty"`
 	// In daemon mode this lists the other servers to replicate blobs.
 	// In admin mode this lists the servers that may get/put blobs.
-	Keys *Keys `yaml:"keys,omitempty"`
+	Keys *ServiceKeys `yaml:"keys,omitempty"`
 	// Usually generated with -new-keys then edited to remove the
 	// unnecessary secrete keys.
 }
