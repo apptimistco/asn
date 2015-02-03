@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"io"
+	"io/ioutil"
 	"os"
 
 	"github.com/agl/ed25519"
@@ -176,6 +177,57 @@ func (x *SecEncr) SetYAML(t string, v interface{}) bool {
 	return SetYAML(x, t, v)
 }
 
+func (x *ServiceKeys) SetYAML(t string, v interface{}) (ret bool) {
+	defer func() {
+		if perr := recover(); perr != nil {
+			err := perr.(error)
+			io.WriteString(os.Stderr, err.Error())
+			os.Stderr.Write(NL)
+		} else {
+			ret = true
+		}
+	}()
+	if t == "!!str" {
+		if b, ok := Builtin[v.(string)]; ok {
+			if err := yaml.Unmarshal(b, x); err != nil {
+				panic(err)
+			}
+			return
+		}
+		b, err := ioutil.ReadFile(v.(string))
+		if err != nil {
+			panic(err)
+		}
+		if err := yaml.Unmarshal(b, x); err != nil {
+			panic(err)
+		}
+		return
+	}
+	if t != "!!map" {
+		panic(Error{t, "neither string nor map:"})
+	}
+	for mk, mv := range v.(map[interface{}]interface{}) {
+		mks, ok := mk.(string)
+		if !ok {
+			panic(Error{"service keyword", "not a string"})
+		}
+		switch mks {
+		case "admin":
+			mvm := mv.(map[interface{}]interface{})
+			x.Admin = NewUserKeysMap(mvm)
+		case "server":
+			mvm := mv.(map[interface{}]interface{})
+			x.Server = NewUserKeysMap(mvm)
+		case "nonce":
+			mvs := mv.(string)
+			x.Nonce, _ = NewNonceString(mvs)
+		default:
+			panic(Error{mks, "invalid keyword"})
+		}
+	}
+	return
+}
+
 func (x *SecAuth) Sign(m []byte) *Signature {
 	return (*Signature)(ed25519.Sign(x.Recast(), m))
 }
@@ -267,6 +319,33 @@ func NewPubEncrReader(r io.Reader) (x *PubEncr, err error) {
 	return
 }
 
+func NewPubKeysMap(m map[interface{}]interface{}) *PubKeys {
+	pub := new(PubKeys)
+	for mk, mv := range m {
+		mks, ok := mk.(string)
+		if !ok {
+			panic(Error{"pub key", "keyword not a string"})
+		}
+		mvs, ok := mv.(string)
+		if !ok {
+			panic(Error{mks, "value not a string"})
+		}
+		var err error
+		switch mks {
+		case "auth":
+			pub.Auth, err = NewPubAuthString(mvs)
+		case "encr":
+			pub.Encr, err = NewPubEncrString(mvs)
+		default:
+			panic(Error{mks, "invalid keyword"})
+		}
+		if err != nil {
+			panic(Error{mks, err.Error()})
+		}
+	}
+	return pub
+}
+
 func NewRandomAuthKeys() (*PubAuth, *SecAuth, error) {
 	pub, sec, err := ed25519.GenerateKey(rand.Reader)
 	return (*PubAuth)(pub), (*SecAuth)(sec), err
@@ -328,6 +407,33 @@ func NewSecEncrString(s string) (k *SecEncr, err error) {
 	return
 }
 
+func NewSecKeysMap(m map[interface{}]interface{}) *SecKeys {
+	sec := new(SecKeys)
+	for mk, mv := range m {
+		mks, ok := mk.(string)
+		if !ok {
+			panic(Error{"sec key", "keyword not a string"})
+		}
+		mvs, ok := mv.(string)
+		if !ok {
+			panic(Error{mks, "value not a string"})
+		}
+		var err error
+		switch mks {
+		case "auth":
+			sec.Auth, err = NewSecAuthString(mvs)
+		case "encr":
+			sec.Encr, err = NewSecEncrString(mvs)
+		default:
+			panic(Error{mks, "invalid keyword"})
+		}
+		if err != nil {
+			panic(Error{mks, err.Error()})
+		}
+	}
+	return sec
+}
+
 func NewSharedString(s string) (x *Shared, err error) {
 	x = new(Shared)
 	err = DecodeFromString(x, s)
@@ -338,4 +444,31 @@ func NewSignatureString(s string) (x *Signature, err error) {
 	x = new(Signature)
 	err = DecodeFromString(x, s)
 	return
+}
+
+func NewUserKeysMap(m map[interface{}]interface{}) *UserKeys {
+	u := new(UserKeys)
+	for mk, mv := range m {
+		mks, ok := mk.(string)
+		if !ok {
+			panic(Error{"user key", "keyword not a string"})
+		}
+		switch mks {
+		case "pub":
+			xm, ok := mv.(map[interface{}]interface{})
+			if !ok {
+				panic(Error{mks, "not a map"})
+			}
+			u.Pub = NewPubKeysMap(xm)
+		case "sec":
+			xm, ok := mv.(map[interface{}]interface{})
+			if !ok {
+				panic(Error{mks, "not a map"})
+			}
+			u.Sec = NewSecKeysMap(xm)
+		default:
+			panic(Error{mks, "invalid keyword"})
+		}
+	}
+	return u
 }

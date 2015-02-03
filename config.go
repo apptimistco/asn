@@ -8,69 +8,15 @@ import (
 	"io/ioutil"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v1"
 )
 
-const (
-	DefaultConfigFN = "asn.yaml"
-	ExampleConfigs  = `
-Server CONFIG Format:
-  name: STRING
-  dir: PATH
-  lat: FLOAT
-  lon: FLOAT
-  listen:
-  - unix:///PATH.sock
-  - tcp://:PORT
-  - ws://[HOST][:PORT]/PATH.ws
-  keys:
-    admin:
-      pub:
-        encr: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-        auth: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-    server:
-      pub:
-        encr: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-        auth: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-      sec:
-        encr: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-        auth: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-    nonce: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-
-Admin CONFIG Format:
-  name: STRING
-  dir: PATH
-  lat: FLOAT
-  lon: FLOAT
-  keys:
-    admin:
-      pub:
-        encr: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-        auth: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-      sec:
-        encr: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-        auth: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-    server:
-      pub:
-        encr: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-        auth: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-    nonce: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-  server:
-  - name: local
-    url: unix:///PATH.sock
-  - name: sf
-    url: ws://HOST[:PORT]/PATH.ws
-    lat: 37.774929
-    lon: -122.419415
-  - name: la
-    url: ws://HOST[:PORT]/PATH.ws
-    lat: 34.052234
-    lon: -118.243684
-`
+var (
+	SystemConfigFN = filepath.Join("etc", DefaultConfigFN)
+	SystemReposDN  = filepath.Join("srv", DefaultName)
 )
-
-var SystemConfigFN = filepath.FromSlash("/etc/asn.yaml")
 
 type Config struct {
 	Name string
@@ -96,14 +42,6 @@ type Config struct {
 	Keys *ServiceKeys `yaml:"keys,omitempty"`
 	// Usually generated with -new-keys then edited to remove the
 	// unnecessary secrete keys.
-}
-
-func ReadConfigFile(fn string) (b []byte, err error) {
-	b, err = ioutil.ReadFile(fn)
-	if err != nil && fn == DefaultConfigFN {
-		b, err = ioutil.ReadFile(SystemConfigFN)
-	}
-	return
 }
 
 // Bytes marshals the Config for output to a file.
@@ -147,7 +85,42 @@ func (c *Config) Check(m Mode) (err error) {
 	return
 }
 
-func (c *Config) Parse(b []byte) error { return yaml.Unmarshal(b, c) }
+func (c *Config) Parse(fn string) (err error) {
+	var b []byte
+	var def struct{ name, dir string }
+	var ok bool
+	if b, ok = Builtin[fn]; ok {
+		def.name = fn
+		def.dir = fn + ReposExt
+	} else if fn == DefaultConfigFN {
+		b, err = ioutil.ReadFile(DefaultConfigFN)
+		def.name = DefaultName
+		if err != nil {
+			b, err = ioutil.ReadFile(SystemConfigFN)
+			if err != nil {
+				return
+			}
+			def.dir = SystemReposDN
+		} else {
+			def.dir = DefaultReposDN
+		}
+	} else if b, err = ioutil.ReadFile(fn); err == nil {
+		def.name = strings.TrimSuffix(fn, ConfigExt)
+		def.dir = def.name + ReposExt
+	} else {
+		return
+	}
+	if err := yaml.Unmarshal(b, c); err != nil {
+		return err
+	}
+	if c.Name == "" {
+		c.Name = def.name
+	}
+	if c.Dir == "" {
+		c.Dir = def.dir
+	}
+	return nil
+}
 
 // retrieve Server Index of named, url or numbered server.
 func (c *Config) SI(s string) (i int, err error) {

@@ -32,6 +32,68 @@ Examples:
   EOF
 
 `
+	ExampleConfigs = `
+Server CONFIG Format:
+  name: STRING
+  dir: PATH
+  lat: FLOAT
+  lon: FLOAT
+  listen:
+  - unix:///PATH.sock
+  - tcp://:PORT
+  - ws://[HOST][:PORT]/PATH.ws
+  keys:
+    admin:
+      pub:
+        encr: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+        auth: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+    server:
+      pub:
+        encr: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+        auth: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+      sec:
+        encr: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+        auth: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+    nonce: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+
+Admin CONFIG Format:
+  name: STRING
+  dir: PATH
+  lat: FLOAT
+  lon: FLOAT
+  keys:
+    admin:
+      pub:
+        encr: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+        auth: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+      sec:
+        encr: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+        auth: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+    server:
+      pub:
+        encr: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+        auth: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+    nonce: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+  server:
+  - name: local
+    url: unix:///PATH.sock
+  - name: sf
+    url: ws://HOST[:PORT]/PATH.ws
+    lat: 37.774929
+    lon: -122.419415
+  - name: la
+    url: ws://HOST[:PORT]/PATH.ws
+    lat: 34.052234
+    lon: -118.243684
+`
+	ConfigExt = ".yaml"
+	DiagExt   = ".diag"
+	LogExt    = ".log"
+	ReposExt  = ".asn"
+
+	DefaultName     = "asn"
+	DefaultConfigFN = DefaultName + ConfigExt
+	DefaultReposDN  = ReposExt
 )
 
 var (
@@ -85,14 +147,16 @@ func init() {
 	FS.BoolVar(&Show.sums, "show-sums", false,
 		"Print sums of *.go files and exit.")
 	FS.StringVar(&FN.config, "config", DefaultConfigFN,
-		`Set configuration filename.
+		`Load configuration from named file or builtin string.
 	Without this flag asn searches './' and '/etc' for 'asn.yaml'.`)
 	FS.StringVar(&FN.diag, "diag", "",
 		`If built with the 'diag' tag, this redirects output
-	to the named file instead of syslog.`)
+	to the named file instead of syslog or 'NAME.diag' with the
+	prefix of the config flag.`)
 	FS.StringVar(&FN.log, "log", "",
 		`If built *without* the 'nolog' tag, this redirects
-	output to the named file instead of syslog.`)
+	output to the named file instead of syslog or 'NAME.log' with
+	the prefix of the config flag.`)
 }
 
 func main() {
@@ -111,6 +175,19 @@ func main() {
 		`Connect to the configured server with the matching name,
 	URL or at the given index.`)
 	err := FS.Parse(os.Args[1:])
+	prefix := strings.TrimSuffix(FN.config, ConfigExt)
+	diagfn := ""
+	if FN.diag != "" {
+		diagfn = FN.diag
+	} else if FN.config != DefaultConfigFN {
+		diagfn = prefix + DiagExt
+	}
+	logfn := ""
+	if FN.log != "" {
+		logfn = FN.log
+	} else if FN.config != DefaultConfigFN {
+		logfn = prefix + LogExt
+	}
 	switch {
 	case err == flag.ErrHelp:
 		return
@@ -121,9 +198,6 @@ func main() {
 		return
 	case Show.help:
 		ShowHelp()
-		return
-	case Show.config:
-		cmd.ShowConfig()
 		return
 	case Show.errors:
 		cmd.ShowErrors()
@@ -138,28 +212,22 @@ func main() {
 		cmd.ShowSums()
 		return
 	}
-	if BuiltInConfig != "" && FN.config != DefaultConfigFN {
-		if err = cmd.Cfg.Parse([]byte(BuiltInConfig)); err != nil {
-			goto egress
-		}
-	} else {
-		var b []byte
-		if b, err = ReadConfigFile(FN.config); err != nil {
-			goto egress
-		}
-		if err = cmd.Cfg.Parse(b); err != nil {
+	if diagfn != "" {
+		if err = Diag.Create(diagfn); err != nil {
 			goto egress
 		}
 	}
-	if FN.diag != "" {
-		if err = Diag.Create(FN.diag); err != nil {
+	if logfn != "" {
+		if err = Log.Create(logfn); err != nil {
 			goto egress
 		}
 	}
-	if FN.log != "" {
-		if err = Log.Create(FN.log); err != nil {
-			goto egress
-		}
+	if err = cmd.Cfg.Parse(FN.config); err != nil {
+		goto egress
+	}
+	if Show.config {
+		cmd.ShowConfig()
+		return
 	}
 	cmd.Sig = make(Sig, 1)
 	cmd.Done = make(Done, 1)

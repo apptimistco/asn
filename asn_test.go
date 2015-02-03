@@ -9,7 +9,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"os/signal"
 	"regexp"
@@ -21,7 +20,6 @@ type Buffer struct{ bytes.Buffer }
 type AsnTest struct {
 	mode Mode
 	fn   string
-	base []byte
 	in   Buffer
 	out  Buffer
 	cmd  Command
@@ -37,49 +35,16 @@ var (
 	atm = AsnTestMap{
 		"admin": &AsnTest{
 			mode: AdminMode,
-			fn:   "test-adm.yaml",
-			base: []byte(`
-name: test-adm
-dir: test-adm.asn
-lat: 37.7833
-lon: -122.4167
-server:
-- name: sf
-  url: unix:///test-sf.sock
-  lat: 181
-  lon: 0
-- name: la
-  url: unix:///test-la.sock
-  lat: 34.0500
-  lon: -118.2500
-- name: sf.ws
-  url: ws://localhost:6080/asn/test-sf.ws
-  lat: 37.7833
-  lon: -122.4167
-`)},
+			fn:   "test-adm",
+		},
 		"sf": &AsnTest{
 			mode: ServerMode,
-			fn:   "test-sf.yaml",
-			base: []byte(`
-name: test-sf
-dir: test-sf.asn
-lat: 37.7833
-lon: -122.4167
-listen:
-- unix:///test-sf.sock
-- ws://localhost:6080/asn/test-sf.ws
-`)},
+			fn:   "test-sf",
+		},
 		"la": &AsnTest{
 			mode: ServerMode,
-			fn:   "test-la.yaml",
-			base: []byte(`
-name: test-la
-dir: test-la.asn
-lat: 34.0500
-lon: -118.2500
-listen:
-- unix:///test-la.sock
-`)},
+			fn:   "test-la",
+		},
 	}
 )
 
@@ -109,36 +74,15 @@ func AsnTestConfig(t *testing.T) {
 	}
 	for _, x := range atm {
 		if atf.clean {
-			Diag.Println("rm", x.fn)
-			os.Remove(x.fn)
-			Diag.Println("rm -r", x.cmd.Cfg.Dir)
-			os.RemoveAll(x.cmd.Cfg.Dir)
+			config := x.fn + DefaultConfigExt
+			repos := x.fn + DefaultReposExt
+			Diag.Println("rm", config)
+			os.Remove(config)
+			Diag.Println("rm -r", repos)
+			os.RemoveAll(repos)
 		}
-		if f, err := os.Open(x.fn); err == nil {
-			if b, err := ioutil.ReadAll(f); err == nil {
-				if err = x.cmd.Cfg.Parse(b); err != nil {
-					t.Fatal(err)
-				}
-			} else {
-				t.Fatal(err)
-			}
-		} else {
-			k, err := NewKeys()
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, x := range atm {
-				if err = x.cmd.Cfg.Parse(x.base); err != nil {
-					t.Fatal(err)
-				}
-				x.cmd.Cfg.Keys = k
-				err = ioutil.WriteFile(x.fn, x.cmd.Cfg.Bytes(),
-					os.FileMode(0660))
-				if err != nil {
-					t.Fatal(err)
-				}
-			}
-			break
+		if err := x.cmd.Cfg.Parse(x.fn); err != nil {
+			t.Fatal(err)
 		}
 	}
 }

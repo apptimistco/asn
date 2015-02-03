@@ -40,19 +40,18 @@ Build `asn` with diagnostics.
 
 Generate keys and hack a config.
 
-    asn -new-keys > keys.yaml
-    cp ~/src/github.com/apptimistco/asn/test-sf.yaml .
-    cp ~/src/github.com/apptimistco/asn/test-adm.yaml .
-    editor test-sf.yaml
-    editor test-adm.yaml
+    asn -new-keys > my-keys.yaml
+    asn -config test-sf -show-config >my-srv.yaml
+    echo keys: my-keys.yaml >>my-srv.yaml
+    editor my-srv.yaml
+    asn -config test-adm -show-config >my-adm.yaml
+    echo keys: my-keys.yaml >>my-adm.yaml
+    editor my-adm.yaml
 
 Run and test.
 
-    asn -config test-sf &
-    asn -config test-adm echo hello world
-
-[![GoDoc](https://godoc.org/github.com/apptimistco/asn?status.png)](
-https://godoc.org/github.com/apptimistco/asn)
+    asn -config my-srv &
+    asn -config my-adm echo hello world
 
 #### MacOS ####
 To run `asn` under MacOS, start by installing Go tools.
@@ -81,3 +80,6 @@ or, after installing Macports: https://guide.macports.org/
 Install readline before getting asn.
 
     sudo port install readline
+
+[![GoDoc](https://godoc.org/github.com/apptimistco/asn?status.png)](
+https://godoc.org/github.com/apptimistco/asn)
