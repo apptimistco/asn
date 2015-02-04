@@ -681,8 +681,11 @@ func (ses *Ses) ExecNewUser(args ...string) interface{} {
 	// copy author also?
 	copy(owner.ASN.Auth[:], k.Pub.Auth[:])
 	if isBinary {
-		// Ack 2 secret keys for new user in binary.
-		return append(k.Sec.Encr[:], k.Sec.Auth[:]...)
+		// Ack keys for new user in binary.
+		out := append(k.Sec.Encr[:], k.Sec.Auth[:]...)
+		out = append(out, k.Pub.Encr[:]...)
+		out = append(out, k.Pub.Auth[:]...)
+		return out;
 	}
 	out, err := yaml.Marshal(k)
 	if err != nil {
