@@ -1,5 +1,5 @@
 Package `asn` implements the _Apptimist Social Network Protocol_ described in
-this [RFC]( https://github.com/apptimistco/rfc/blob/master/asn.md).
+this [RFC](rfc.md).
 
 Fetch `asn` and its dependencies with GO tool.
 
