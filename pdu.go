@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 )
 
 const PDUBufSz = 4096
@@ -16,6 +17,7 @@ const PDUBufSz = 4096
 var (
 	pduPool    chan *PDU
 	pduBufPool chan *pduBuf
+	pduMutex   = &sync.Mutex{}
 
 	ErrPDUInvalid = errors.New("invalid PDU (neither File nor Buffer)")
 	ErrPDUOverrun = errors.New("overrun PDU Buffer")
@@ -42,6 +44,7 @@ type PDU struct {
 	FN    string
 	PB    *pduBuf
 	Limit int64
+	ref   int
 }
 
 func newPDU() (pdu *PDU) {
@@ -51,6 +54,7 @@ func newPDU() (pdu *PDU) {
 	default:
 		pdu = new(PDU)
 	}
+	pdu.ref = 1
 	Diag.Output(3, fmt.Sprintf("new pdu %p\n", pdu))
 	return
 }
@@ -80,6 +84,12 @@ func (pdu *PDU) Close() (err error) {
 		pdu.File = nil
 	}
 	return
+}
+
+func (pdu *PDU) Clone() {
+	pduMutex.Lock()
+	defer pduMutex.Unlock()
+	pdu.ref += 1
 }
 
 // copier reads data from R and writes it to W until limit, EOF or error. The
@@ -112,6 +122,13 @@ func (pdu *PDU) copier(r io.Reader, w io.Writer) (n int64, err error) {
 	return
 }
 
+func (pdu *PDU) deref() int {
+	pduMutex.Lock()
+	defer pduMutex.Unlock()
+	pdu.ref -= 1
+	return pdu.ref
+}
+
 // Error returns the unread portion of the pdu as an error.
 func (pdu *PDU) Error() error {
 	if pdu.Len() > 0 {
@@ -125,6 +142,9 @@ func (pdu *PDU) Error() error {
 func (pdu *PDU) Free() {
 	if pdu == nil {
 		Diag.Output(2, "free nil pdu")
+		return
+	}
+	if pdu.deref() > 0 {
 		return
 	}
 	Diag.Output(2, fmt.Sprintf("free pdu %p\n", pdu))
@@ -145,7 +165,6 @@ func (pdu *PDU) Free() {
 	select {
 	case pduPool <- pdu:
 	}
-	pdu = nil
 }
 
 func (pdu *PDU) Len() int {

@@ -58,7 +58,7 @@ func (ses *Ses) DN() string { return ses.srv.cmd.Cfg.Dir }
 
 // dist pdu list to online sessions. Any sessions to other servers receive the
 // first link which is the REPOS/SHA. All user sessions receive "asn/mark". Any
-// other named blob named REPOS/USER/PATH goes to the associated USER sessions.
+// other blob named REPOS/USER/PATH goes to the associated USER sessions.
 func (ses *Ses) dist(pdus []*PDU) {
 	ses.srv.ForEachSession(func(x *Ses) {
 		if x == nil || x == ses || x.ASN == nil ||
@@ -70,6 +70,7 @@ func (ses *Ses) dist(pdus []*PDU) {
 		server := x.srv.cmd.Cfg.Keys.Server.Pub.Encr
 		if login.Equal(server) {
 			if pdus[0] != nil {
+				pdus[0].Clone()
 				x.ASN.Tx(pdus[0])
 			}
 			return
@@ -80,6 +81,7 @@ func (ses *Ses) dist(pdus []*PDU) {
 				if fn == "asn/mark" ||
 					(suser != "" &&
 						suser == slogin[:len(suser)]) {
+					pdu.Clone()
 					x.ASN.Tx(pdu)
 					// be sure to send only one per session
 					return
