@@ -1,9 +1,17 @@
 #!/bin/bash
 
+shopt -s extglob
+
 if [[ "$1" =~ (-h|-help|--help|help) ]] ; then
-	echo Usage: $0 [-tags TAGS]
+	echo Usage: $0 '[-n|--dry-run] [-tags TAGS]'
 	exit 0
 fi
 
-go build -o docker/asn $@
-docker build -t asn docker
+dryrun=
+if [[ "$1" =~ (-n|--dry-run) ]] ; then
+	dryrun=echo
+	shift
+fi
+
+eval $dryrun go build -o docker/asn $@
+eval $dryrun docker build -t asn docker

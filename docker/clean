@@ -1,4 +1,24 @@
 #!/bin/bash
 
-docker rm $(docker ps --no-trunc -aq)
-docker rmi $(docker images -q --filter "dangling=true")
+shopt -s extglob
+
+if [[ "$1" =~ (-h|-help|--help|help) ]] ; then
+	echo Usage: $0 '[-n|--dry-run]'
+	exit 0
+fi
+
+dryrun=
+if [[ "$1" =~ (-n|--dry-run) ]] ; then
+	dryrun=echo
+	shift
+fi
+
+containers=$(docker ps --no-trunc -aq)
+if [ -n "$containers" ] ; then
+	eval $dryrun docker rm $containers
+fi
+
+images=$(docker images -q --filter "dangling=true")
+if [ -n "$images" ] ; then
+	eval $dryrun docker rmi $images
+fi
