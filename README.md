@@ -53,6 +53,8 @@ Run and test.
     asn -config my-srv &
     asn -config my-adm echo hello world
 
+See this [recipe](docker/recipe.md) for build and test of Docker containers.
+
 #### MacOS ####
 To run `asn` under MacOS, start by installing Go tools.
 

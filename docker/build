@@ -1,0 +1,9 @@
+#!/bin/bash
+
+if [[ "$1" =~ (-h|-help|--help|help) ]] ; then
+	echo Usage: $0 [-tags TAGS]
+	exit 0
+fi
+
+go build -o docker/asn $@
+docker build -t asn docker
