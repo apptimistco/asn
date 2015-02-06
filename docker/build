@@ -1,17 +1,85 @@
 #!/bin/bash
 
-shopt -s extglob
+set -e
 
-if [[ "$1" =~ (-h|-help|--help|help) ]] ; then
-	echo Usage: $0 '[-n|--dry-run] [-tags TAGS]'
-	exit 0
-fi
+usage="Usage: $0 [flags]
+
+Flags:
+	-n	print but don't run commands
+	-x	print the commands
+	-q	quiet docker build output
+	-t NAME
+	-tags TAGS
+
+Names:
+	asn:scratch	default
+	asn:wheezy
+
+Tags:
+	diag
+	nolog"
+
+ErrNoStaticASN="Error: $0: missing 'asn-static'
+Try: ./go-build-asn -s"
+
+ErrNoASN="Error: $0: missing 'asn'
+Try: ./go-build-asn"
 
 dryrun=
-if [[ "$1" =~ (-n|--dry-run) ]] ; then
-	dryrun=echo
-	shift
-fi
+name=asn:scratch
 
-eval $dryrun go build -o docker/asn $@
-eval $dryrun docker build -t asn docker
+declare -a go_build_asn_flags
+
+while [ $# -gt 0 ] ; do
+	case "$1" in
+	-h|-help|--help|help)
+		echo "$usage"
+		exit 0
+		;;
+	-n)	go_build_asn_flags+=( -n )
+		dryrun=:
+		shift
+		;;
+	-x)	go_build_asn_flags+=( $1 )
+		shift
+		;;
+	-q)	quiet=-q
+		;;
+	-t)	shift
+		name=$1
+		shift
+		;;
+	*)	echo $0:  invalid argument: "$1" >/dev/stderr
+		echo "$usage" >/dev/stderr
+		exit 1
+		;;
+	esac
+done
+
+case "$name" in
+asn:scratch)
+	go_build_asn_flags+=( -s )
+	path=docker/scratch
+	if [ ! -x asn-static ] ; then
+		echo "${ErrNoStaticASN}" >/dev/stderr
+		exit 1
+	fi
+	;;
+asn:wheezy)
+	path=docker/wheezy
+	go_build_asn_flags+=( -o docker/wheezy/asn )
+	if [ ! -x asn ] ; then
+		echo "${ErrNoASN}" >/dev/stderr
+		exit 1
+	fi
+	;;
+*)	echo $0: unsupported image: $name >/dev/stderr
+	exit 1
+esac
+
+set -x
+
+./go-build-asn -o ${path}/asn "${go_build_asn_flags[@]}"
+$dryrun docker build ${quiet} -t ${name} ${path}
+
+{ set +x; } 2>/dev/null

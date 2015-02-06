@@ -1,0 +1,56 @@
+#!/bin/bash
+
+usage="Usage: $0 [go flags] [netgo | cgo]
+
+Go Flags:
+	-n	print but don't run commands
+	-x	print the commands
+	-v	print names of built packages
+	-tags 'TAGS ...'
+
+Tags:
+	cgo	use libc getaddr
+	netgo	exclude cgo (use with static builds)"
+
+declare -a go_clean_flags go_build_flags tags
+
+while [ $# -gt 0 ] ; do
+	case "$1" in
+	-h|-help|--help|help)
+		echo "$usage"
+		exit 0
+		;;
+	-n)
+		go_clean_flags+=( -n )
+		go_build_flags+=( -n )
+		shift
+		;;
+	-v)
+		go_build_flags+=( -v )
+		shift
+		;;
+	-x)
+		go_clean_flags+=( -x )
+		go_build_flags+=( -x )
+		shift
+		;;
+	-tags)
+		shift
+		tags+=( "$1" )
+		shift
+		;;
+	*)	echo $0:  invalid argument: "$1" >/dev/stderr
+		echo "$usage" >/dev/stderr
+		exit 1
+		;;
+	esac
+done
+
+test ${#tags[@]} -gt 0 && go_build_flags+=( -tags "${tags[*]}" )
+
+set -ex
+
+go clean -i "${go_clean_flags[@]}" net
+go install "${go_build_flags[@]}" net
+
+{ set +x; } 2>/dev/null

@@ -1,0 +1,94 @@
+#!/bin/bash
+
+usage="Usage: $0 [-s] [go flags]
+
+	-s	static build for scratch docker image
+		This implies 'nocli' and expects that the 'net' package
+		was rebuilt with './go-rebuild-net netgo'
+
+Go Flags:
+	-n	print but don't run commands
+	-x	print the commands
+	-v	print names of built packages
+	-o output
+		instead of './asn'
+	-tags 'TAGS ...'
+
+Tags:
+	nocli	don't include gnureadline
+	nolog	stub log output
+	diag	enable diagnostic output (may be noisy)"
+
+ErrStatic="Error: can't build static asn with installed 'net' package.
+Try: ./go-rebuild-net -tags netgo"
+
+WarnCgo="Warning: building asn with netgo tagged 'net' package.
+Try: ./go-rebuild-net -tags cgo"
+
+declare -a go_clean_flags go_build_flags ldflags tags
+
+while [ $# -gt 0 ] ; do
+	case "$1" in
+	-h|-help|--help|help)
+		echo "$usage"
+		exit 0
+		;;
+	-n)
+		go_clean_flags+=( -n )
+		go_build_flags+=( -n )
+		shift
+		;;
+	-x)
+		go_clean_flags+=( -x )
+		go_build_flags+=( -x )
+		shift
+		;;
+	-v)
+		go_build_flags+=( -v )
+		shift
+		;;
+	-o)	shift
+		output="$1"
+		shift
+		;;
+	-tags)
+		shift
+		tags+=( "$1" )
+		shift
+		;;
+	-s)	shift
+		ldflags=( -linkmode external -extldflags "-static" )
+		: ${output:=asn-static}
+		go_build_flags+=( -a )
+		tags+=( netgo nocli )
+		export CGO_ENABLED=0
+		;;
+	*)	echo $0: invalid argument: "$1" >/dev/stderr
+		echo "$usage" >/dev/stderr
+		exit 1
+		;;
+	esac
+done
+
+GOROOT=$(go env GOROOT)
+GOOS=$(go env GOOS)
+GOARCH=$(go env GOARCH)
+
+if ar t $GOROOT/pkg/${GOOS}_${GOARCH}/net.a | grep -q _cgo ; then
+	if test ${#ldflags[@]} -gt 0 ; then
+		echo "$ErrStatic" >/dev/stderr
+		exit 1
+	fi
+elif test ${#ldflags[@]} -ne 0 ; then
+	echo "$WarnCgo" >/dev/stderr
+fi
+
+test -n "${output}" && go_build_flags+=( -o "${output}" )
+test ${#tags[@]} -gt 0 && go_build_flags+=( -tags "${tags[*]}" )
+test ${#ldflags[@]} -gt 0 && go_build_flags+=( -ldflags "${ldflags[*]}" )
+
+set -ex
+
+go build "${go_build_flags[@]}"
+
+{ set +x; } 2>/dev/null

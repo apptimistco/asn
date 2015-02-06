@@ -3,10 +3,10 @@
 /*.patch
 
 # ASN build and test files
-/asn
-/asn.test
-/asn.pprof
-/docker/asn
+asn
+asn-static
+asn.test
+asn.pprof
 /*.diag
 /*.log
 /*.yaml
