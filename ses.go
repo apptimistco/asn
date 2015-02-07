@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"os"
 	"strings"
+	"sync"
 	"syscall"
 )
 
@@ -28,6 +29,8 @@ type Ses struct {
 	Lat, Lon, Range int32
 
 	asnsrv bool // true if: asnsrv CONFIG ...
+
+	ExecMutex *sync.Mutex // don't free until GoExec ret
 }
 
 var SesPool chan *Ses
@@ -38,7 +41,9 @@ func NewSes() (ses *Ses) {
 	select {
 	case ses = <-SesPool:
 	default:
-		ses = &Ses{}
+		ses = &Ses{
+			ExecMutex: &sync.Mutex{},
+		}
 	}
 	ses.ASN = NewASN()
 	return
@@ -99,6 +104,7 @@ func (ses *Ses) dist(pdus []*PDU) {
 func (ses *Ses) Free() {
 	if ses != nil {
 		ses.name = ""
+		ses.ASN.Repos = nil
 		ses.ASN.Free()
 		ses.ASN = nil
 		ses.srv = nil

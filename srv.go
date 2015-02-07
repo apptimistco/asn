@@ -150,7 +150,11 @@ func (srv *Server) ForEachSession(f func(*Ses)) {
 }
 
 func (srv *Server) Free(ses *Ses) {
+	ses.ExecMutex.Lock()
+	ses.ExecMutex.Unlock()
 	srv.mutex.Lock()
+	defer srv.mutex.Unlock()
+	ses.Free()
 	for i := range srv.sessions {
 		if srv.sessions[i] == ses {
 			copy(srv.sessions[i:], srv.sessions[i+1:])
@@ -159,17 +163,12 @@ func (srv *Server) Free(ses *Ses) {
 			break
 		}
 	}
-	ses.Free()
-	srv.mutex.Unlock()
 }
 
 func (srv *Server) handler(conn net.Conn) {
 	ses := srv.newSes()
 	defer func() {
-		ses.ASN.Println("closed")
-		ses.ASN.Repos = nil
-		ses.ASN.Free()
-		ses.ASN = nil
+		ses.ASN.SetStateClosed()
 		srv.Free(ses)
 	}()
 	ses.ASN.SetConn(conn)
@@ -222,9 +221,7 @@ func (srv *Server) handler(conn net.Conn) {
 				err = ErrUnsupported
 			}
 		}
-		if id != ExecReqId {
-			pdu.Free() // otherwise free in RxExec go routine
-		}
+		pdu.Free()
 		pdu = nil
 		if err != nil {
 			ses.ASN.Println("Error:", err)
