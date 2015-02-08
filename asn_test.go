@@ -74,10 +74,7 @@ func AsnTestConfig(t *testing.T) {
 	}
 	for _, x := range atm {
 		if atf.clean {
-			config := x.fn + DefaultConfigExt
-			repos := x.fn + DefaultReposExt
-			Diag.Println("rm", config)
-			os.Remove(config)
+			repos := x.fn + ReposExt
 			Diag.Println("rm -r", repos)
 			os.RemoveAll(repos)
 		}
