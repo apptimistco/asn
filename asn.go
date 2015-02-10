@@ -74,6 +74,9 @@ type ASN struct {
 	Repos *Repos
 	// Ack handler map
 	Acker acker
+	Time  struct {
+		In, Out time.Time
+	}
 }
 
 // Flush ASN pool.

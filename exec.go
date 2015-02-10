@@ -953,7 +953,7 @@ func (ses *Ses) blobberRecurse(f func(fn string) error, r io.Reader) error {
 
 func (ses *Ses) NewBlob(owner, author *ReposUser, name string,
 	v interface{}) interface{} {
-	blob := NewBlob(owner.Key, author.Key, name)
+	blob := NewBlob(owner.Key, author.Key, name, ses.ASN.Time.Out)
 	defer func() {
 		blob.Free()
 		blob = nil

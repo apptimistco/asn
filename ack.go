@@ -51,19 +51,21 @@ func (acker *acker) UnMap(req Requester) {
 }
 
 // Rx processes recieved acks with registered handlers.
-func (acker *acker) Rx(pdu *PDU) error {
+func (asn *ASN) AckerRx(pdu *PDU) (err error) {
 	var req Requester
-	if _, err := req.ReadFrom(pdu); err != nil {
-		return err
+	if _, err = req.ReadFrom(pdu); err != nil {
+		return
 	}
-	acker.mutex.Lock()
-	f := acker.fmap[req]
-	acker.mutex.Unlock()
+	asn.Acker.mutex.Lock()
+	f := asn.Acker.fmap[req]
+	asn.Acker.mutex.Unlock()
 	if f == nil {
 		pdu.Free()
-		return errors.New("unregistered Ack request")
+		err = errors.New("unregistered Ack request")
+	} else {
+		err = f(req, pdu)
 	}
-	return f(req, pdu)
+	return
 }
 
 // Ack the given requester. If the argument is an error, the associate code is
@@ -154,18 +156,18 @@ func AckOut(w io.Writer, argv ...interface{}) {
 
 // NewAckSuccessPDUFile creates a temp file preloaded with the asn success ack
 // header and ready to write success data.
-func (asn *ASN) NewAckSuccessPDUFile(req Requester) (pdu *PDU, err error) {
+func (asn *ASN) NewAckSuccessPDUFile(req Requester) (ack *PDU, err error) {
 	f, err := asn.Repos.Tmp.NewFile()
 	if err != nil {
 		return
 	}
-	pdu = NewPDUFile(f)
+	ack = NewPDUFile(f)
 	f = nil
 	v := asn.version
-	v.WriteTo(pdu)
-	AckReqId.Version(v).WriteTo(pdu)
-	req.WriteTo(pdu)
-	Success.Version(v).WriteTo(pdu)
+	v.WriteTo(ack)
+	AckReqId.Version(v).WriteTo(ack)
+	req.WriteTo(ack)
+	Success.Version(v).WriteTo(ack)
 	return
 }
 

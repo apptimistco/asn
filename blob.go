@@ -145,7 +145,7 @@ func BlobPoolFlush() {
 	}
 }
 
-func NewBlob(owner, author *PubEncr, name string) (blob *Blob) {
+func NewBlob(owner, author *PubEncr, name string, t time.Time) (blob *Blob) {
 	select {
 	case blob = <-BlobPool:
 	default:
@@ -154,7 +154,7 @@ func NewBlob(owner, author *PubEncr, name string) (blob *Blob) {
 	blob.Owner = *owner
 	blob.Author = *author
 	blob.Name = name
-	blob.Time = time.Now()
+	blob.Time = t
 	return
 }
 

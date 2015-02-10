@@ -199,9 +199,10 @@ func (srv *Server) handler(conn net.Conn) {
 		}
 		id.ReadFrom(pdu)
 		id.Internal(v)
+		ses.ASN.Time.Out = time.Now()
 		switch id {
 		case AckReqId:
-			err = ses.ASN.Acker.Rx(pdu)
+			err = ses.ASN.AckerRx(pdu)
 		case ExecReqId:
 			err = ses.RxExec(pdu)
 		case LoginReqId:

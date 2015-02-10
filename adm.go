@@ -80,7 +80,8 @@ func (adm *Adm) AuthBlob() error {
 
 func (adm *Adm) Blob(name string, v interface{}) (err error) {
 	blob := NewBlob(adm.cmd.Cfg.Keys.Admin.Pub.Encr,
-		adm.cmd.Cfg.Keys.Admin.Pub.Encr, name)
+		adm.cmd.Cfg.Keys.Admin.Pub.Encr,
+		name, time.Now())
 	defer blob.Free()
 	f, err := adm.asn.Repos.Tmp.NewFile()
 	if err != nil {
@@ -296,7 +297,7 @@ func (adm *Adm) handler() {
 		adm.asn.Diag("handle", id)
 		switch id {
 		case AckReqId:
-			err = adm.asn.Acker.Rx(pdu)
+			err = adm.asn.AckerRx(pdu)
 		case BlobId:
 			adm.File(pdu)
 		default:
