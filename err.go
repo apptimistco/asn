@@ -181,8 +181,18 @@ func (e Err) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 // Error records the name of the errant object and the reason it failed.
-type Error struct{ Name, Reason string }
+type Error struct{ name, reason string }
 
 func (e *Error) Error() string {
-	return "asn: " + strconv.Quote(e.Name) + ": " + e.Reason
+	return "asn: " + strconv.Quote(e.name) + ": " + e.reason
+}
+
+// DescError prefaces a description to a given error
+type DescError struct {
+	desc string
+	err  error
+}
+
+func (e *DescError) Error() string {
+	return "asn: " + e.desc + ": " + e.err.Error()
 }

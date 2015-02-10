@@ -11,8 +11,13 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
+
+	"github.com/apptimistco/asn/debug"
+	"github.com/apptimistco/asn/debug/file"
 )
 
 const (
@@ -22,12 +27,12 @@ const (
 	ExampleUsage = `
 Examples:
 
-  $ asn -config example-sf.yaml &
-  $ asn -config example-adm.yaml echo hello world
-  $ asn -config example-adm.yaml -server 1 echo hello world
-  $ asn -config example-adm.yaml -server sf echo hello world
-  $ asn -config example-adm.yaml -server sf			# CLI
-  $ asn -config example-adm.yaml -server sf - <<-EOF
+  $ asn -config example-sf &
+  $ asn -config example-adm echo hello world
+  $ asn -config example-adm -server 1 echo hello world
+  $ asn -config example-adm -server sf echo hello world
+  $ asn -config example-adm -server sf			# CLI
+  $ asn -config example-adm -server sf - <<-EOF
 	echo hello world
   EOF
 
@@ -87,7 +92,6 @@ Admin CONFIG Format:
     lon: -118.243684
 `
 	ConfigExt = ".yaml"
-	DiagExt   = ".diag"
 	LogExt    = ".log"
 	ReposExt  = ".asn"
 
@@ -112,24 +116,9 @@ var (
 		newkeys bool
 		sums    bool
 	}
-	NL = []byte{'\n'}
+	NL    = []byte{'\n'}
+	Time0 = time.Time{}
 )
-
-type Done chan error
-type Sig chan os.Signal
-
-type Command struct {
-	In   io.ReadCloser
-	Out  io.WriteCloser
-	Sig  Sig
-	Done Done
-	Cfg  Config
-	Flag struct {
-		Admin   bool
-		Nologin bool
-		Server  string
-	}
-}
 
 func init() {
 	FS = flag.NewFlagSet("asn", flag.ContinueOnError)
@@ -149,55 +138,119 @@ func init() {
 	FS.StringVar(&FN.config, "config", DefaultConfigFN,
 		`Load configuration from named file or builtin string.
 	Without this flag asn searches './' and '/etc' for 'asn.yaml'.`)
-	FS.StringVar(&FN.diag, "diag", "",
-		`If built with the 'diag' tag, this redirects output
-	to the named file instead of syslog or 'NAME.diag' with the
-	prefix of the config flag.`)
 	FS.StringVar(&FN.log, "log", "",
-		`If built *without* the 'nolog' tag, this redirects
-	output to the named file instead of syslog or 'NAME.log' with
-	the prefix of the config flag.`)
+		`This redirects all log output to the named file instead of
+	syslog or 'NAME.log' with the prefix of the config flag.`)
+}
+
+func IsBlob(fi os.FileInfo) bool {
+	fn := fi.Name()
+	return !fi.IsDir() && len(fn) == 2*(SumSz-1) && IsHex(fn)
+}
+
+func IsBridge(fn string) bool {
+	return filepath.Base(filepath.Dir(fn)) == "bridge"
+}
+
+func IsHex(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if !('0' <= c && c <= '9' ||
+			'a' <= c && c <= 'f' ||
+			'A' <= c && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func IsINT(sig os.Signal) bool  { return sig == syscall.SIGINT }
+func IsTERM(sig os.Signal) bool { return sig == syscall.SIGTERM }
+func IsUSR1(sig os.Signal) bool { return sig == syscall.SIGUSR1 }
+
+func IsTopDir(fi os.FileInfo) bool {
+	fn := fi.Name()
+	return fi.IsDir() && len(fn) == ReposTopSz && IsHex(fn)
+}
+
+func IsUser(fn string) bool {
+	return IsHex(fn) && len(fn) == 2*(PubEncrSz-1)
+}
+
+// LN creates directories if required then hard links dst with src.
+// LN panic's on error so the calling function must recover.
+func LN(src, dst string) {
+	dn := filepath.Dir(dst)
+	if _, err := os.Stat(dn); err != nil {
+		if !os.IsNotExist(err) {
+			panic(err)
+		}
+		if err := MkdirAll(dn); err != nil {
+			panic(err)
+		}
+	}
+	if err := syscall.Link(src, dst); err != nil {
+		panic(err)
+	}
+	debug.Fixme.Output(2, fmt.Sprintln("ln", src, dst))
 }
 
 func main() {
 	syscall.Umask(0007)
 	cmd := Command{
-		In:  os.Stdin,
-		Out: os.Stdout,
+		Stdin:  file.File{os.Stdin},
+		Stdout: os.Stdout,
+		Stderr: os.Stderr,
 	}
+	pid := os.Getpid()
 	FS.BoolVar(&cmd.Flag.Admin, "admin", false,
 		`Run COMMAND or CLI in admin mode.
 	This is the default action if the configuration doesn't have
 	any listerners.`)
-	FS.BoolVar(&cmd.Flag.Nologin, "nologin", false,
+	FS.BoolVar(&cmd.Flag.NoLogin, "nologin", false,
 		`run COMMAND w/o login`)
 	FS.StringVar(&cmd.Flag.Server, "server", "0",
 		`Connect to the configured server with the matching name,
 	URL or at the given index.`)
 	err := FS.Parse(os.Args[1:])
 	prefix := strings.TrimSuffix(FN.config, ConfigExt)
-	diagfn := ""
-	if FN.diag != "" {
-		diagfn = FN.diag
-	} else if FN.config != DefaultConfigFN {
-		diagfn = prefix + DiagExt
-	}
+	cmd.Debug.Set(prefix)
 	logfn := ""
 	if FN.log != "" {
 		logfn = FN.log
 	} else if FN.config != DefaultConfigFN {
 		logfn = prefix + LogExt
 	}
+	if logfn != "" {
+		var f *os.File
+		if f, err = os.Create(logfn); err != nil {
+			return
+		}
+		defer f.Close()
+		if err = f.Chmod(0664); err != nil {
+			return
+		}
+		debug.Redirect(f)
+		cmd.Log("start", pid)
+	}
+	defer func() {
+		cmd.Log("end", pid)
+		if err != nil {
+			cmd.Diag(debug.Depth(2), err)
+			io.WriteString(cmd.Stderr, err.Error())
+			cmd.Stderr.Write(NL)
+			Exit(1)
+		}
+	}()
 	switch {
 	case err == flag.ErrHelp:
 		return
 	case err != nil:
-		io.WriteString(os.Stderr, err.Error())
-		os.Stderr.Write(NL)
-		Exit(1)
 		return
 	case Show.help:
-		ShowHelp()
+		showHelp(cmd.Stdout)
 		return
 	case Show.errors:
 		cmd.ShowErrors()
@@ -212,18 +265,8 @@ func main() {
 		cmd.ShowSums()
 		return
 	}
-	if diagfn != "" {
-		if err = Diag.Create(diagfn); err != nil {
-			goto egress
-		}
-	}
-	if logfn != "" {
-		if err = Log.Create(logfn); err != nil {
-			goto egress
-		}
-	}
 	if err = cmd.Cfg.Parse(FN.config); err != nil {
-		goto egress
+		return
 	}
 	if Show.config {
 		cmd.ShowConfig()
@@ -243,66 +286,98 @@ func main() {
 	if err = cmd.Wait(); err == io.EOF {
 		err = nil
 	}
-	FlushASN()
 	FlushPDU()
-	Log.Close()
-	Diag.Close()
-egress:
-	if err != nil {
-		os.Stderr.WriteString(err.Error())
-		os.Stderr.WriteString("\n")
-		Exit(1)
-	}
+}
+
+func MkdirAll(dn string) error {
+	return os.MkdirAll(dn, os.FileMode(0770))
+}
+
+func showHelp(out io.Writer) {
+	io.WriteString(out, Usage)
+	io.WriteString(out, "Flags:\n\n")
+	FS.PrintDefaults()
+	io.WriteString(out, ExampleUsage)
+	io.WriteString(out, UsageCommands)
+	io.WriteString(out, ExampleConfigs)
 }
 
 func ShowHelp() {
-	io.WriteString(os.Stderr, Usage)
-	io.WriteString(os.Stderr, "Flags:\n\n")
-	FS.PrintDefaults()
-	io.WriteString(os.Stderr, ExampleUsage)
-	io.WriteString(os.Stderr, UsageCommands)
-	io.WriteString(os.Stderr, ExampleConfigs)
+	showHelp(os.Stderr)
+}
+
+// UrlPathSearch looks for the given file in this order.
+//	path		return
+//	/foo.bar	foo.bar
+//	/foo/bar	foo/bar if foo/ exists; otherwise
+//			/foo/bar
+func UrlPathSearch(path string) string {
+	dir := filepath.Dir(path)
+	if dir == "/" {
+		return filepath.Base(path)
+	} else {
+		if f, err := os.Open(dir[1:]); err == nil {
+			f.Close()
+			return path[1:]
+		}
+	}
+	return path
+}
+
+type Command struct {
+	debug.Debug
+	Stdin  ReadCloseWriteToer
+	Stdout io.WriteCloser
+	Stderr io.WriteCloser
+	Sig    Sig
+	Done   Done
+	Cfg    Config
+	Flag   struct {
+		Admin   bool
+		NoLogin bool
+		Server  string
+	}
 }
 
 func (cmd *Command) ShowConfig() {
 	c := cmd.Cfg
 	c.Keys = nil
-	io.WriteString(cmd.Out, c.String())
+	io.WriteString(cmd.Stdout, c.String())
 }
 
 func (cmd *Command) ShowIds() {
-	fmt.Fprintf(cmd.Out, "%25s%s\n", "", "Version")
-	fmt.Fprintf(cmd.Out, "%25s", "")
+	fmt.Fprintf(cmd.Stdout, "%25s%s\n", "", "Version")
+	fmt.Fprintf(cmd.Stdout, "%25s", "")
 	for v := Version(0); v <= Latest; v++ {
-		fmt.Fprintf(cmd.Out, "%4d", v)
+		fmt.Fprintf(cmd.Stdout, "%4d", v)
 	}
-	cmd.Out.Write(NL)
+	cmd.Stdout.Write(NL)
 	for id := RawId + 1; id < Nids; id++ {
-		fmt.Fprintf(cmd.Out, "%8d.", id)
+		fmt.Fprintf(cmd.Stdout, "%8d.", id)
 		if s := id.String(); len(s) > 0 {
-			fmt.Fprintf(cmd.Out, "%16s", s+"Id")
+			fmt.Fprintf(cmd.Stdout, "%16s", s+"Id")
 			for v := Version(0); v <= Latest; v++ {
-				fmt.Fprintf(cmd.Out, "%4d", id.Version(v))
+				fmt.Fprintf(cmd.Stdout, "%4d", id.Version(v))
 			}
 		}
-		cmd.Out.Write(NL)
+		cmd.Stdout.Write(NL)
 	}
 }
 
 func (cmd *Command) ShowErrors() {
-	fmt.Fprintf(cmd.Out, "%25s%s\n", "", "Version")
-	fmt.Fprintf(cmd.Out, "%25s", "")
+	fmt.Fprintf(cmd.Stdout, "%25s%s\n", "", "Version")
+	fmt.Fprintf(cmd.Stdout, "%25s", "")
 	for v := Version(0); v <= Latest; v++ {
-		fmt.Fprintf(cmd.Out, "%4d", v)
+		fmt.Fprintf(cmd.Stdout, "%4d", v)
 	}
-	cmd.Out.Write(NL)
+	cmd.Stdout.Write(NL)
 	for ecode, s := range ErrStrings {
-		fmt.Fprintf(cmd.Out, "%8d.", ecode)
-		fmt.Fprintf(cmd.Out, "%16s", s)
+		fmt.Fprintf(cmd.Stdout, "%8d.", ecode)
+		fmt.Fprintf(cmd.Stdout, "%16s", s)
 		for v := Version(0); v <= Latest; v++ {
-			fmt.Fprintf(cmd.Out, "%4d", Err(ecode).Version(v))
+			fmt.Fprintf(cmd.Stdout, "%4d", Err(ecode).Version(v))
 		}
-		cmd.Out.Write(NL)
+		cmd.Stdout.Write(NL)
 	}
 }
 
@@ -310,7 +385,7 @@ func (cmd *Command) ShowNewKeys() {
 	if k, err := NewRandomServiceKeys(); err != nil {
 		io.WriteString(os.Stderr, err.Error())
 	} else {
-		io.WriteString(cmd.Out, k.String())
+		io.WriteString(cmd.Stdout, k.String())
 	}
 }
 
@@ -331,7 +406,7 @@ func (cmd *Command) ShowSums() {
 			} else {
 				sum := NewSumOf(f)
 				out = append(out, *sum)
-				fmt.Fprintf(cmd.Out, "%s:\t%s\n",
+				fmt.Fprintf(cmd.Stdout, "%s:\t%s\n",
 					fi.Name(), sum.String())
 				sum = nil
 			}
@@ -356,12 +431,12 @@ func (cmd *Command) ShowSums() {
 
 func (cmd *Command) Wait() error { return cmd.Done.Wait() }
 
+type Done chan error
+
 func (done Done) Wait() error { return <-done }
+
+type Sig chan os.Signal
 
 func (sig Sig) INT()  { sig <- syscall.SIGINT }
 func (sig Sig) TERM() { sig <- syscall.SIGTERM }
 func (sig Sig) USR1() { sig <- syscall.SIGUSR1 }
-
-func IsINT(sig os.Signal) bool  { return sig == syscall.SIGINT }
-func IsTERM(sig os.Signal) bool { return sig == syscall.SIGTERM }
-func IsUSR1(sig os.Signal) bool { return sig == syscall.SIGUSR1 }

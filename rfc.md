@@ -289,7 +289,7 @@ BLOB is one of these ASN object references:
     BLOB = -
     BLOB = FILE | DIR
     BLOB = '$'<'*' | SUM>[@TIME]
-    BLOB = ['~'['*' | '.' | USER]][GLOB][@TIME]
+    BLOB = ['~'['*' | '.' | '(' USERGLOB ')' | USER]][GLOB][@TIME]
 
 The hyphen ('-') indicates that additional references are listed after the
 end-of-command separator.
@@ -301,10 +301,12 @@ for all blobs made after any given time. Otherwise, SUM is a UTF-8 hexadecimal
 encoding of the 64-byte SHA512 sum of the referenced blob file that may be
 abbreviated to as few as 8 characters.
 
-The tilde symbol introduces a user reference with LOGIN as default; asterisk
-for all users; and period for all users that have marked on the session
-server. Otherwise, USER is a UTF-8 hexadecimal encoding of the 32-byte public
-encryption key that may be abbreviated to as few as 8 characters.
+The tilde symbol introduces a user reference with LOGIN as default; an
+asterisk for all users; a period for all login users on the session server; or
+a parentheses enclosed glob pattern that is expanded to the list of users
+having that pattern. Otherwise, USER is a UTF-8 hexadecimal encoding of the
+32-byte public encryption key that may be abbreviated to as few as 8
+characters.
 
 GLOB may have forward slash ("/") hierarchy with `*` and `?` expansion
 characters to match repository names (e.g. `asn/hel*` for `asn/hello`)

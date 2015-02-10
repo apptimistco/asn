@@ -9,18 +9,39 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"runtime"
 	"strings"
 	"time"
 
+	"github.com/apptimistco/asn/debug"
+	"github.com/apptimistco/asn/debug/file"
 	"golang.org/x/net/websocket"
 )
 
+type Adm struct {
+	debug.Debug
+	cmd       *Command
+	asn       asn
+	ephemeral struct {
+		pub *PubEncr
+		sec *SecEncr
+	}
+	done struct {
+		req, handler Done
+	}
+	repos Repos
+	rxq   chan *PDU
+	store bool
+}
+
 func (cmd *Command) Admin(args ...string) {
-	adm := Adm{cmd: cmd}
+	adm := Adm{
+		cmd: cmd,
+	}
 	err := cmd.Cfg.Check(AdminMode)
-	defer func() { cmd.Done <- err }()
+	defer func() {
+		cmd.Done <- err
+	}()
 	if err != nil {
 		runtime.Goexit()
 	}
@@ -28,34 +49,34 @@ func (cmd *Command) Admin(args ...string) {
 	if err != nil {
 		runtime.Goexit()
 	}
-	if adm.repos, err = NewRepos(adm.cmd.Cfg.Dir); err != nil {
+	if err = adm.repos.Set(adm.cmd.Cfg.Dir); err != nil {
 		runtime.Goexit()
 	}
-	defer func() {
-		adm.repos.Free()
-		adm.repos = nil
-	}()
+	adm.Debug.Set(adm.cmd.Cfg.Name)
+	defer func() { adm.repos.Reset() }()
+	adm.asn.Init()
+	adm.asn.Set(&adm.repos)
 	if err = adm.Connect(si); err != nil {
 		runtime.Goexit()
 	}
+	adm.done.handler = make(Done, 1)
+	adm.done.req = make(Done, 1)
 	go adm.handler()
 	defer func() {
-		close(adm.asn.Go.Tx.C)
+		close(adm.asn.tx.ch)
 		if err == nil {
-			err = <-adm.done
+			err = <-adm.done.handler
 		} else {
-			<-adm.done
+			<-adm.done.handler
 		}
-		close(adm.done)
+		close(adm.done.handler)
+		close(adm.done.req)
 		if err == io.EOF {
 			err = nil
 		}
-		adm.asn.Repos.Free()
-		adm.asn.Repos = nil
-		adm.asn.Free()
-		adm.asn = nil
+		adm.asn.Reset()
 	}()
-	if cmd.Flag.Nologin == false {
+	if cmd.Flag.NoLogin == false {
 		if err = adm.Login(); err != nil {
 			runtime.Goexit()
 		}
@@ -71,57 +92,47 @@ func (cmd *Command) Admin(args ...string) {
 	}
 }
 
-type Adm struct {
-	cmd       *Command
-	asn       *ASN
-	repos     *Repos
-	ephemeral struct {
-		pub *PubEncr
-		sec *SecEncr
-	}
-	done Done
-}
-
-func (adm *Adm) AuthBlob() error {
-	return adm.Blob("asn/auth", (*adm.cmd.Cfg.Keys.Admin.Pub.Auth)[:])
-}
-
-func (adm *Adm) Blob(name string, v interface{}) (err error) {
-	blob := NewBlob(adm.cmd.Cfg.Keys.Admin.Pub.Encr,
-		adm.cmd.Cfg.Keys.Admin.Pub.Encr,
-		name, time.Now())
-	defer blob.Free()
-	f, err := adm.asn.Repos.Tmp.NewFile()
+func (adm *Adm) AuthBlob() (err error) {
+	f := adm.repos.tmp.New()
+	defer func() {
+		if err != nil {
+			adm.repos.tmp.Free(f)
+		}
+	}()
+	_, err = NewFH(adm.cmd.Cfg.Keys.Admin.Pub.Encr,
+		adm.cmd.Cfg.Keys.Admin.Pub.Encr, AsnAuth).WriteTo(f)
 	if err != nil {
 		return
 	}
-	if _, _, err = blob.SummingWriteContentsTo(f, v); err == nil {
-		adm.asn.Tx(NewPDUFile(f))
-		adm.asn.Diag(BlobId, name)
+	_, err = adm.cmd.Cfg.Keys.Admin.Pub.Auth.WriteTo(f)
+	if err != nil {
+		return
 	}
-	f = nil
+	adm.asn.Tx(NewPDUFile(f))
 	return
 }
 
+func (adm *Adm) Blobber(_ func(string) error, _ io.Reader, _ ...string) error {
+	return nil
+}
+
 // command process given line as space separated args
-func (adm *Adm) cmdLine(line string) error {
+func (adm *Adm) cmdLine(line string) (err error) {
 	args := strings.Split(line, " ")
 	if len(args) == 0 || args[0] == "" {
-		return nil
+		return
 	}
 	switch args[0] {
 	case "quit":
-		return io.EOF
+		err = io.EOF
 	case "auth-blob":
-		return adm.AuthBlob()
+		err = adm.AuthBlob()
 	case "login":
-		return adm.Login()
+		err = adm.Login()
 	default:
-		if err := adm.Exec(args...); err != nil {
-			fmt.Println(err)
-		}
+		err = adm.Exec(args...)
 	}
-	return nil
+	return
 }
 
 // Connect to the si'th server listed in the configuration.
@@ -142,18 +153,14 @@ func (adm *Adm) Connect(si int) (err error) {
 	}
 	adm.ephemeral.pub, adm.ephemeral.sec, _ = NewRandomEncrKeys()
 	conn.Write(adm.ephemeral.pub[:])
-	adm.asn = NewASN()
-	adm.asn.Repos = adm.repos
-	adm.asn.Name.Local = adm.cmd.Cfg.Name
-	adm.asn.Name.Remote = adm.cmd.Cfg.Server[si].Name
-	adm.asn.NameSession()
-	adm.asn.SetBox(NewBox(2,
+	adm.asn.name.local = adm.cmd.Cfg.Name
+	adm.asn.Set(adm.cmd.Cfg.Server[si].Name)
+	adm.asn.Set(NewBox(2,
 		adm.cmd.Cfg.Keys.Nonce,
 		adm.cmd.Cfg.Keys.Server.Pub.Encr,
 		adm.ephemeral.pub,
 		adm.ephemeral.sec))
-	adm.asn.SetConn(conn)
-	adm.done = make(Done, 1)
+	adm.asn.Set(conn)
 	adm.asn.Diag("connected")
 	return
 }
@@ -165,7 +172,7 @@ func (adm *Adm) Dial(durl *URL) (net.Conn, error) {
 		if err != nil {
 			return nil, err
 		}
-		Diag.Println(adm.cmd.Cfg.Name, "dialing", scheme, addr)
+		adm.Diag("dialing", scheme, addr)
 		return net.DialTCP(scheme, nil, addr)
 	case "unix":
 		path := UrlPathSearch(durl.Path)
@@ -173,33 +180,30 @@ func (adm *Adm) Dial(durl *URL) (net.Conn, error) {
 		if err != nil {
 			return nil, err
 		}
-		Diag.Println(adm.cmd.Cfg.Name, "dialing", scheme, addr)
+		adm.Diag("dialing", scheme, addr)
 		return net.DialUnix(scheme, nil, addr)
 	case "ws":
 		turl := durl.String()
-		Diag.Println(adm.cmd.Cfg.Name, "dialing", turl)
+		adm.Diag("dialing", turl)
 		nc, err := net.Dial("tcp", durl.Host)
 		if err != nil {
-			Diag.Println(adm.cmd.Cfg.Name, err)
+			adm.Diag(err)
 			return nil, err
 		}
 		origin := "http://localhost" // FIXME
 		wscfg, err := websocket.NewConfig(turl, origin)
 		if err != nil {
-			Diag.Println(adm.cmd.Cfg.Name, err)
+			adm.Diag(err)
 			nc.Close()
 			return nil, err
 		}
 		ws, err := websocket.NewClient(wscfg, nc)
 		if err != nil {
-			Diag.Println(adm.cmd.Cfg.Name, err)
+			adm.Diag(err)
 		}
 		return ws, err
 	default:
-		return nil, &Error{
-			Name:   scheme,
-			Reason: "unsupported URL scheme",
-		}
+		return nil, &Error{scheme, "unsupported URL scheme"}
 	}
 }
 
@@ -207,46 +211,28 @@ func (adm *Adm) DN() string {
 	return adm.cmd.Cfg.Dir
 }
 
-func (adm *Adm) File(pdu *PDU) {
-	blob, err := NewBlobFrom(pdu)
-	if err != nil {
-		adm.asn.Diag("NewBlob", err)
-		return
-	}
-	sum, fn, err := adm.asn.Repos.File(blob, pdu)
-	if err != nil {
-		adm.asn.Diag("File", err)
-	}
-	links, err := adm.asn.Repos.MkLinks(blob, sum, fn)
-	for i := range links {
-		if links[i] != nil {
-			adm.asn.Diag("saved", links[i].FN)
-			links[i].Free()
-			links[i] = nil
-		}
-	}
-	links = nil
-	blob.Free()
-	pdu.Free()
-}
-
 // handler processes Rx.Q until closed or kill signal
 func (adm *Adm) handler() {
 	defer func() {
 		r := recover()
-		if !adm.asn.Go.Tx.X {
-			close(adm.asn.Go.Tx.C)
+		if adm.asn.tx.going {
+			close(adm.asn.tx.ch)
 		}
 		if r != nil {
-			adm.done <- r.(error)
+			err := r.(error)
+			adm.done.handler <- err
+			adm.done.req <- err
 		}
 	}()
 	for {
 		select {
 		case <-adm.cmd.Sig:
-			close(adm.asn.Go.Tx.C)
-		case pdu, opened := <-adm.asn.Go.Rx.C:
+			close(adm.asn.tx.ch)
+		case pdu, opened := <-adm.asn.rx.ch:
 			if !opened {
+				if adm.asn.rx.err != nil {
+					panic(adm.asn.rx.err)
+				}
 				panic(io.EOF)
 			}
 			if err := pdu.Open(); err != nil {
@@ -254,24 +240,29 @@ func (adm *Adm) handler() {
 			}
 			var v Version
 			v.ReadFrom(pdu)
-			if v < adm.asn.Version() {
-				adm.asn.SetVersion(v)
-			}
 			var id Id
 			id.ReadFrom(pdu)
 			id.Internal(v)
 			switch id {
 			case AckReqId:
 				if err := adm.asn.AckerRx(pdu); err != nil {
-					os.Stderr.WriteString(err.Error())
-					os.Stderr.WriteString("\n")
+					adm.Diag(err)
 				}
 			case BlobId:
-				adm.File(pdu)
+				if adm.store {
+					_, err := adm.repos.Store(adm, v, nil,
+						pdu)
+					if err != nil {
+						panic(err)
+					}
+				} else if adm.rxq != nil {
+					pdu.Clone()
+					adm.rxq <- pdu
+				} else {
+					adm.PrintBlob(pdu)
+				}
 			default:
-				os.Stderr.WriteString("unsupported pdu: ")
-				os.Stderr.WriteString(id.String())
-				os.Stderr.WriteString("\n")
+				adm.Diag("unsupported pdu:", id)
 			}
 			pdu.Free()
 		}
@@ -286,27 +277,11 @@ func (adm *Adm) IsService(key *PubEncr) bool {
 	return *key == *adm.cmd.Cfg.Keys.Server.Pub.Encr
 }
 
-func (adm *Adm) script() error {
-	scanner := bufio.NewScanner(adm.cmd.In)
-	for scanner.Scan() {
-		if err := adm.cmdLine(scanner.Text()); err != nil {
-			return err
-		}
-	}
-	return scanner.Err()
-}
-
 func (adm *Adm) Exec(args ...string) (err error) {
 	var pdu *PDU
 	for _, arg := range args {
 		if arg == "-" {
-			f, terr := adm.asn.Repos.Tmp.NewFile()
-			if terr != nil {
-				err = terr
-				return
-			}
-			pdu = NewPDUFile(f)
-			f = nil
+			pdu = NewPDUFile(adm.repos.tmp.New())
 			break
 		}
 	}
@@ -316,32 +291,36 @@ func (adm *Adm) Exec(args ...string) (err error) {
 	v := adm.asn.Version()
 	v.WriteTo(pdu)
 	ExecReqId.Version(v).WriteTo(pdu)
-	req := NewRequesterString("exec")
+	req := NewReqString("exec")
 	req.WriteTo(pdu)
 	pdu.Write([]byte(strings.Join(args, "\x00")))
 	for _, arg := range args {
 		if arg == "-" {
 			pdu.Write([]byte{0, 0}[:])
-			pdu.ReadFrom(adm.cmd.In)
+			pdu.ReadFrom(adm.cmd.Stdin)
 			break
 		}
 	}
-	adm.asn.Diag("exec", args[0], "...")
-	done := make(Done, 1)
-	adm.asn.Acker.Map(req, func(req Requester, ack *PDU) (err error) {
-		adm.asn.Acker.UnMap(req)
-		if err = adm.asn.ParseAckError(ack); err == nil {
-			ack.WriteTo(adm.cmd.Out)
-			adm.asn.Diag("exec", args[0], "success")
-		} else {
-			adm.asn.Diag("exec", args[0], err)
+	adm.asn.acker.Map(req, func(req Req, err error, ack *PDU) error {
+		adm.asn.acker.UnMap(req)
+		if err == nil {
+			ack.WriteTo(adm.cmd.Stdout)
 		}
-		done <- err
-		return
+		adm.done.req <- err
+		return err
 	})
+	adm.asn.Diag("exec", args[0], "...")
+	if args[0] == "clone" {
+		adm.store = true
+	} else {
+		adm.store = false
+	}
 	adm.asn.Tx(pdu)
-	err = <-done
-	close(done)
+	if err = <-adm.done.req; err != nil {
+		adm.asn.Diag("exec", args[0], err)
+	} else {
+		adm.asn.Diag("exec", args[0], "success")
+	}
 	return
 }
 
@@ -352,34 +331,66 @@ func (adm *Adm) Login() (err error) {
 	v := adm.asn.Version()
 	v.WriteTo(login)
 	LoginReqId.Version(v).WriteTo(login)
-	req := NewRequesterString("login")
+	req := NewReqString("login")
 	req.WriteTo(login)
 	login.Write(key[:])
 	login.Write(sig[:])
-	adm.asn.Diag(LoginReqId, key.String()[:8]+"...",
-		sig.String()[:8]+"...")
-	done := make(Done, 1)
-	adm.asn.Acker.Map(req, func(req Requester, ack *PDU) (err error) {
-		adm.asn.Acker.UnMap(req)
-		if err = adm.asn.ParseAckError(ack); err == nil {
+	adm.asn.Diag("login", key, sig)
+	adm.asn.acker.Map(req, func(req Req, err error, ack *PDU) error {
+		adm.asn.acker.UnMap(req)
+		if err == nil {
 			var peer PubEncr
 			var nonce Nonce
 			ack.Read(peer[:])
 			ack.Read(nonce[:])
-			// adm.asn.Diag("new key:", peer)
-			// adm.asn.Diag("new nonce:", nonce)
-			adm.asn.SetBox(NewBox(2, &nonce, &peer,
-				adm.ephemeral.pub, adm.ephemeral.sec))
-			adm.asn.SetStateEstablished()
-			adm.asn.Diag("login", "success")
-		} else {
-			adm.asn.Diag("login", err)
+			adm.asn.Diag("rekey, nonce:", peer, nonce)
+			adm.asn.Set(NewBox(2, &nonce, &peer, adm.ephemeral.pub,
+				adm.ephemeral.sec))
+			adm.asn.state = established
 		}
-		done <- err
-		return
+		adm.done.req <- err
+		return err
 	})
 	adm.asn.Tx(login)
-	err = <-done
-	close(done)
+	if err = <-adm.done.req; err != nil {
+		adm.asn.Diag("login", err)
+	} else {
+		adm.asn.Diag("login success")
+	}
 	return
+}
+
+func (adm *Adm) PrintBlob(pdu *PDU) {
+	defer pdu.Free()
+	// Version and Id already read in handler
+	blob, err := NewBlobFrom(pdu)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer blob.Free()
+	switch blob.Name {
+	case AsnMark:
+		var mark Mark
+		mark.ReadFrom(pdu)
+		fmt.Println(adm.cmd.Stdout, mark)
+	case "", AsnMessages, AsnMessages + "/":
+		io.Copy(adm.cmd.Stdout, pdu)
+		adm.cmd.Stdout.Write(NL)
+	default:
+		fmt.Println("don't know how to display",
+			blob.Name)
+	}
+}
+
+func (adm *Adm) Send(_ *PubEncr, _ *file.File) {}
+
+func (adm *Adm) script() error {
+	scanner := bufio.NewScanner(adm.cmd.Stdin)
+	for scanner.Scan() {
+		if err := adm.cmdLine(scanner.Text()); err != nil {
+			return err
+		}
+	}
+	return scanner.Err()
 }

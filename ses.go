@@ -5,18 +5,21 @@
 package main
 
 import (
-	"bufio"
+	"bytes"
 	"crypto/rand"
 	"os"
-	"strings"
-	"sync"
-	"syscall"
+
+	"github.com/apptimistco/asn/debug"
+	"github.com/apptimistco/asn/debug/file"
+	"github.com/apptimistco/asn/debug/mutex"
 )
 
 type Ses struct {
-	name string
-	ASN  *ASN
-	srv  *Server
+	mutex.Mutex
+	name string // remote name
+	asn  asn
+	cfg  *Config
+	user *User
 	Keys struct {
 		Server struct {
 			Ephemeral PubEncr
@@ -26,161 +29,36 @@ type Ses struct {
 		}
 	}
 
-	Lat, Lon, Range int32
+	ForEachLogin func(func(*Ses))
 
-	asnsrv bool // true if: asnsrv CONFIG ...
-
-	ExecMutex *sync.Mutex // don't free until GoExec ret
+	asnsrv bool // true if server command line exec
 }
 
-var SesPool chan *Ses
-
-func init() { SesPool = make(chan *Ses, 16) }
-
-func NewSes() (ses *Ses) {
-	select {
-	case ses = <-SesPool:
-	default:
-		ses = &Ses{
-			ExecMutex: &sync.Mutex{},
-		}
-	}
-	ses.ASN = NewASN()
-	return
-}
-
-func SesPoolFlush() {
-	for {
-		select {
-		case <-SesPool:
-		default:
-			return
-		}
-	}
-}
-
-func (ses *Ses) DN() string { return ses.srv.cmd.Cfg.Dir }
-
-// dist pdu list to online sessions. Any sessions to other servers receive the
-// first link which is the REPOS/SHA. All user sessions receive "asn/mark". Any
-// other blob named REPOS/USER/PATH goes to the associated USER sessions.
-func (ses *Ses) dist(pdus []*PDU) {
-	ses.srv.ForEachSession(func(x *Ses) {
-		if x == nil || x == ses || x.ASN == nil ||
-			!x.ASN.IsEstablished() {
-			return
-		}
-		login := x.Keys.Client.Login
-		slogin := login.String()
-		server := x.srv.cmd.Cfg.Keys.Server.Pub.Encr
-		if login.Equal(server) {
-			if pdus[0] != nil {
-				pdus[0].Clone()
-				x.ASN.Tx(pdus[0])
-			}
-			return
-		}
-		for _, pdu := range pdus[1:] {
-			if pdu != nil {
-				suser, fn := x.srv.repos.ParsePath(pdu.FN)
-				if fn == "asn/mark" ||
-					(suser != "" &&
-						suser == slogin[:len(suser)]) {
-					pdu.Clone()
-					x.ASN.Tx(pdu)
-					// be sure to send only one per session
-					return
-				}
-			}
-		}
-	})
-	for i := range pdus {
-		pdus[i].Free()
-		pdus[i] = nil
-	}
-}
-
-// Free the Ses by pooling or release it to GC if pool is full.
-func (ses *Ses) Free() {
-	if ses != nil {
-		ses.name = ""
-		ses.ASN.Repos = nil
-		ses.ASN.Free()
-		ses.ASN = nil
-		ses.srv = nil
-		select {
-		case SesPool <- ses:
-		default:
-		}
-	}
-}
+func (ses *Ses) DN() string { return ses.cfg.Dir }
 
 func (ses *Ses) IsAdmin(key *PubEncr) bool {
-	return *key == *ses.srv.cmd.Cfg.Keys.Admin.Pub.Encr
+	return *key == *ses.cfg.Keys.Admin.Pub.Encr
 }
 
 func (ses *Ses) IsService(key *PubEncr) bool {
-	return *key == *ses.srv.cmd.Cfg.Keys.Server.Pub.Encr
+	return *key == *ses.cfg.Keys.Server.Pub.Encr
 }
 
-func (ses *Ses) Rekey(_ Requester) {
+func (ses *Ses) Rekey(_ Req) {
 	// FIXME
 }
 
-// removals: if pdus[1] is a filename containing "asn/removals",
-// remove the referenced files, then the "asn/removals/" link.
-// However, keep the SUM file to distribute with clone.
-func (ses *Ses) removals(pdus []*PDU) {
-	if len(pdus) == 2 && pdus[1] != nil &&
-		strings.Contains(pdus[1].FN, "asn/removals") {
-		f, err := os.Open(pdus[1].FN)
-		if err != nil {
-			return
-		}
-		defer func() {
-			f.Close()
-			syscall.Unlink(pdus[1].FN)
-			pdus[1].Free()
-			pdus[1] = nil
-		}()
-		BlobSeek(f)
-		scanner := bufio.NewScanner(f)
-		for scanner.Scan() {
-			fn := ses.srv.repos.Join(scanner.Text())
-			ses.ASN.Diag("unlinked", fn)
-			syscall.Unlink(fn)
-		}
-		scanner = nil
-	}
-}
-
-func (ses *Ses) RxBlob(pdu *PDU) (err error) {
-	blob, err := NewBlobFrom(pdu)
-	if err != nil {
-		return
-	}
-	defer func() {
-		blob.Free()
-		blob = nil
-	}()
-	ses.ASN.Trace("rx", BlobId, req, blob.Name)
-	sum, fn, err := ses.srv.repos.File(blob, pdu)
-	if err != nil {
-		return
-	}
-	links, err := ses.srv.repos.MkLinks(blob, sum, fn)
-	if err != nil {
-		return
-	}
-	ses.removals(links)
-	ses.dist(links)
-	links = nil
-	return
+func (ses *Ses) Reset() {
+	ses.name = ""
+	ses.asn.Reset()
+	ses.user = nil
+	ses.cfg = nil
+	ses.ForEachLogin = func(_ func(*Ses)) {}
 }
 
 func (ses *Ses) RxLogin(pdu *PDU) (err error) {
 	var (
-		req Requester
+		req Req
 		sig Signature
 	)
 	req.ReadFrom(pdu)
@@ -191,44 +69,81 @@ func (ses *Ses) RxLogin(pdu *PDU) (err error) {
 	if err != nil {
 		return
 	}
-	ses.ASN.Trace("rx", LoginReqId, req,
-		ses.Keys.Client.Login.String()[:8]+"...",
-		sig.String()[:8]+"...")
+	ses.asn.Trace(debug.Id(LoginReqId), "rx", req, "login",
+		&ses.Keys.Client.Login, &sig)
 	err = ErrFailure
+	login := &ses.Keys.Client.Login
+	ses.user = ses.asn.repos.users.User(login)
 	switch {
-	case ses.Keys.Client.Login.Equal(ses.srv.cmd.Cfg.Keys.Admin.Pub.Encr):
-		if sig.Verify(ses.srv.cmd.Cfg.Keys.Admin.Pub.Auth,
-			ses.Keys.Client.Login[:]) {
-			ses.ASN.Name.Remote = "admin"
+	case bytes.Equal(ses.Keys.Client.Login.Bytes(),
+		ses.cfg.Keys.Admin.Pub.Encr.Bytes()):
+		if sig.Verify(ses.cfg.Keys.Admin.Pub.Auth, login[:]) {
+			ses.asn.Set("admin")
 			err = nil
 		}
-	case ses.Keys.Client.Login.Equal(ses.srv.cmd.Cfg.Keys.Server.Pub.Encr):
-		if sig.Verify(ses.srv.cmd.Cfg.Keys.Server.Pub.Auth,
-			ses.Keys.Client.Login[:]) {
-			ses.ASN.Name.Remote = "server"
+	case bytes.Equal(ses.Keys.Client.Login.Bytes(),
+		ses.cfg.Keys.Server.Pub.Encr.Bytes()):
+		if sig.Verify(ses.cfg.Keys.Server.Pub.Auth, login[:]) {
+			ses.asn.Set("server")
 			err = nil
 		}
 	default:
-		login := ses.Keys.Client.Login
-		user := ses.srv.repos.Users.Search(&login)
-		if user != nil && sig.Verify(&user.ASN.Auth, login[:]) {
-			ses.ASN.Name.Remote = login.String()[:8]
+		if ses.user != nil &&
+			sig.Verify(ses.user.cache.Auth(), login[:]) {
+			ses.asn.Set(login.ShortString())
 			err = nil
 		}
 	}
-	ses.ASN.NameSession()
 	if err == nil {
 		var nonce Nonce
 		rand.Reader.Read(nonce[:])
 		pub, sec, _ := NewRandomEncrKeys()
+		ses.asn.Ack(req, pub.Bytes(), nonce.Bytes())
 		ses.Keys.Server.Ephemeral = *pub
-		ses.ASN.Diag("login rekeyed with", pub.String()[:8]+"...")
-		ses.ASN.Ack(req, pub[:], nonce[:])
-		ses.ASN.SetStateEstablished()
-		ses.ASN.SetBox(NewBox(2, &nonce, &ses.Keys.Client.Ephemeral,
-			pub, sec))
+		ses.asn.Diag("login (key, nonce):",
+			&ses.Keys.Server.Ephemeral, &nonce)
+		ses.asn.Set(NewBox(2, &nonce, &ses.Keys.Client.Ephemeral,
+			&ses.Keys.Server.Ephemeral, sec))
+		if ses.user != nil {
+			ses.user.logins += 1
+		}
+		ses.asn.state = established
 	} else {
-		ses.ASN.Diag("login", err)
+		ses.asn.Diag("login", err)
 	}
 	return
+}
+
+func (ses *Ses) Send(k *PubEncr, f *file.File) {
+	f.Seek(0, os.SEEK_SET)
+	ses.ForEachLogin(func(x *Ses) {
+		if x == ses { // Skip this session
+			return
+		}
+		if bytes.Equal(x.Keys.Client.Login.Bytes(), k.Bytes()) {
+			if dup, err := f.Dup(); err != nil {
+				ses.asn.Diag(err)
+			} else {
+				ses.asn.Fixme(f.Name(), "sent to", k)
+				x.asn.Tx(NewPDUFile(dup))
+			}
+		}
+	})
+}
+
+func (ses *Ses) Set(v interface{}) error {
+	switch t := v.(type) {
+	case *Config:
+		ses.cfg = t
+		ses.Mutex.Set(t.Name)
+		ses.asn.name.local = t.Name
+		ses.asn.Set("unnamed")
+	case func(func(*Ses)):
+		ses.ForEachLogin = t
+	case *Repos:
+		ses.asn.repos = t
+	default:
+		return os.ErrInvalid
+	}
+	return nil
 }

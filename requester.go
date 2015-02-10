@@ -12,28 +12,26 @@ import (
 )
 
 var req struct {
-	mutex *sync.Mutex
-	n     uint64
+	sync.Mutex
+	n uint64
 }
 
-type Requester [8]byte
+type Req [8]byte
 
-func init() { req.mutex = new(sync.Mutex) }
-
-func NextRequester() (r Requester) {
-	req.mutex.Lock()
-	defer req.mutex.Unlock()
+func NextReq() (r Req) {
+	req.Lock()
+	defer req.Unlock()
 	binary.BigEndian.PutUint64(r[:], req.n)
 	req.n += 1
 	return
 }
 
-func NewRequesterString(s string) (r Requester) {
+func NewReqString(s string) (r Req) {
 	copy(r[:], []byte(s))
 	return
 }
 
-func (req *Requester) ReadFrom(r io.Reader) (n int64, err error) {
+func (req *Req) ReadFrom(r io.Reader) (n int64, err error) {
 	ni, err := r.Read(req[:])
 	if err == nil {
 		n = int64(ni)
@@ -41,11 +39,11 @@ func (req *Requester) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-func (req Requester) String() string {
+func (req Req) String() string {
 	return strconv.QuoteToASCII(string(req[:]))
 }
 
-func (req Requester) WriteTo(w io.Writer) (n int64, err error) {
+func (req Req) WriteTo(w io.Writer) (n int64, err error) {
 	ni, err := w.Write(req[:])
 	if err == nil {
 		n = int64(ni)

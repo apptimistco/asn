@@ -7,7 +7,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/apptimistco/asn/debug"
 	"gopkg.in/yaml.v1"
 )
 
@@ -91,7 +91,7 @@ Where BLOB may be any of the following:
 
   -
   '$'<'*' | SUM>[@TIME]
-  ['~'['*' | '.' | USER]][GLOB][@TIME]
+  ['~'['*' | '.' | '(' USERGLOB ')' | USER]][GLOB][@TIME]
 `
 )
 
@@ -121,7 +121,7 @@ var (
 
 func (ses *Ses) RxExec(pdu *PDU) error {
 	var (
-		req  Requester
+		req  Req
 		cmd  [256]byte
 		args []string
 	)
@@ -131,11 +131,11 @@ func (ses *Ses) RxExec(pdu *PDU) error {
 		return err
 	}
 	const demarcation = "\x00\x00"
-	dem := bytes.Index(cmd[:n], []byte(demarcation));
+	dem := bytes.Index(cmd[:n], []byte(demarcation))
 	if dem < 0 && n == len(cmd) {
 		err := errors.New("command too long")
-		Diag.Println(err)
-		ses.ASN.Ack(req, err)
+		ses.Diag(err)
+		ses.asn.Ack(req, err)
 		return nil
 	}
 	if dem > 0 {
@@ -145,54 +145,52 @@ func (ses *Ses) RxExec(pdu *PDU) error {
 		args = strings.Split(string(cmd[:n]), "\x00")
 	}
 	pdu.Clone()
-	ses.ASN.Diag("exec", args)
-	ses.ExecMutex.Lock()
+	ses.Lock()
 	go ses.GoExec(req, pdu, args...)
 	return nil
 }
 
-func (ses *Ses) GoExec(req Requester, pdu *PDU, args ...string) {
-	ses.ASN.Ack(req, ses.Exec(req, pdu, args...))
+func (ses *Ses) GoExec(req Req, pdu *PDU, args ...string) {
+	ses.asn.Ack(req, ses.Exec(req, pdu, args...))
 	pdu.Free()
-	ses.ExecMutex.Unlock()
+	ses.Unlock()
 }
 
-func (ses *Ses) Exec(req Requester, r io.Reader,
-	args ...string) interface{} {
-	ses.ASN.Trace("rx", ExecReqId, req, args)
+func (ses *Ses) Exec(req Req, in ReadWriteToer, args ...string) interface{} {
+	ses.asn.Trace(debug.Id(ExecReqId), "rx", req, "exec", args)
 	switch args[0] {
 	case "exec-help", "help":
 		return UsageCommands
 	case "approve":
-		return ses.ExecApprove(r, args[1:]...)
+		return ses.ExecApprove(in, args[1:]...)
 	case "auth":
 		return ses.ExecAuth(args[1:]...)
 	case "blob":
-		return ses.ExecBlob(r, args[1:]...)
+		return ses.ExecBlob(in, args[1:]...)
 	case "cat":
-		return ses.ExecCat(req, r, args[1:]...)
+		return ses.ExecCat(req, in, args[1:]...)
 	case "clone":
 		return ses.ExecClone(args[1:]...)
 	case "echo":
 		return strings.Join(args[1:], " ") + "\n"
 	case "fetch":
-		return ses.ExecFetch(r, args[1:]...)
+		return ses.ExecFetch(in, args[1:]...)
 	case "filter":
-		return ses.ExecFilter(req, r, args[1:]...)
+		return ses.ExecFilter(req, in, args[1:]...)
 	case "gc":
 		return ses.ExecGC(req, args[1:]...)
 	case "iam":
 		return ses.ExecIam(args[1:]...)
 	case "ls":
-		return ses.ExecLS(req, r, args[1:]...)
+		return ses.ExecLS(req, in, args[1:]...)
 	case "mark":
 		return ses.ExecMark(args[1:]...)
 	case "newuser":
 		return ses.ExecNewUser(args[1:]...)
 	case "objdump":
-		return ses.ExecObjDump(r, args[1:]...)
+		return ses.ExecObjDump(in, args[1:]...)
 	case "rm":
-		return ses.ExecRM(r, args[1:]...)
+		return ses.ExecRM(in, args[1:]...)
 	case "trace":
 		return ses.ExecTrace(args[1:]...)
 	case "users":
@@ -210,16 +208,11 @@ func (ses *Ses) ExecApprove(r io.Reader, args ...string) interface{} {
 	if len(args) < 1 {
 		return ErrUsageApprove
 	}
-	author := ses.srv.repos.Users.Search(&ses.Keys.Client.Login)
-	owner := author
-	defer func() {
-		author = nil
-		owner = nil
-	}()
+	owner := ses.user
 	sums := make(Sums, 0)
 	defer func() { sums = nil }()
 	err := ses.Blobber(func(fn string) error {
-		// Permission to remove is checked in blob.Proc()
+		// Permission to remove is checked in repos.ProcSums()
 		f, err := os.Open(fn)
 		if err != nil {
 			return err
@@ -231,18 +224,17 @@ func (ses *Ses) ExecApprove(r io.Reader, args ...string) interface{} {
 	if err != nil {
 		return err
 	}
-	return ses.NewBlob(owner, author, "asn/approvals/", sums)
+	sum, err := ses.Store(owner, ses.user, AsnApprovals+"/", sums)
+	if err != nil {
+		return err
+	}
+	return sum
 }
 
 func (ses *Ses) ExecAuth(args ...string) interface{} {
-	author := ses.srv.repos.Users.Search(&ses.Keys.Client.Login)
-	owner := author
-	defer func() {
-		author = nil
-		owner = nil
-	}()
+	owner := ses.user
 	if len(args) > 2 && args[0] == "-u" {
-		owner = ses.srv.repos.Users.Search(args[1])
+		owner = ses.asn.repos.users.UserString(args[1])
 		if owner == nil {
 			return ErrNOENT
 		}
@@ -254,23 +246,22 @@ func (ses *Ses) ExecAuth(args ...string) interface{} {
 	if len(args[0]) != (PubAuthSz * 2) {
 		return os.ErrInvalid
 	}
-	authPub, err := hex.DecodeString(args[0])
+	authPub, err := NewPubAuthString(args[0])
 	if err != nil {
 		return err
 	}
 	if len(authPub) != PubAuthSz {
 		return os.ErrInvalid
 	}
-	return ses.NewBlob(owner, author, "asn/auth", authPub)
+	sum, err := ses.Store(owner, ses.user, AsnAuth, authPub)
+	if err != nil {
+		return err
+	}
+	return sum
 }
 
-func (ses *Ses) ExecBlob(r io.Reader, args ...string) interface{} {
-	author := ses.srv.repos.Users.Search(&ses.Keys.Client.Login)
-	owner := author
-	defer func() {
-		author = nil
-		owner = nil
-	}()
+func (ses *Ses) ExecBlob(in ReadWriteToer, args ...string) interface{} {
+	owner := ses.user
 	if len(args) < 2 {
 		return ErrUsageBlob
 	}
@@ -283,30 +274,47 @@ func (ses *Ses) ExecBlob(r io.Reader, args ...string) interface{} {
 		} else {
 			name = args[0][slash+1:]
 		}
-		owner = ses.srv.repos.Users.Search(args[0][1:slash])
+		owner = ses.asn.repos.users.UserString(args[0][1:slash])
 		if owner == nil {
 			return ErrNOENT
 		}
 	}
-	if args[1] == "-" {
-		Diag.Printf("%T\n", r)
-		return ses.NewBlob(owner, author, name, r)
-	} else {
-		return ses.NewBlob(owner, author, name,
-			strings.Join(args[1:], " "))
+	var sum *Sum
+	svc := ses.cfg.Keys
+	err := ses.asn.repos.Permission(owner, ses.user, svc, name)
+	if err != nil {
+		return err
 	}
+	if args[1] == "-" {
+		ses.asn.Diagf("%T\n", in)
+		sum, err = ses.Store(owner, ses.user, name, in)
+	} else {
+		sum, err = ses.Store(owner, ses.user, name,
+			bytes.NewBufferString(strings.Join(args[1:], " ")))
+	}
+	if err != nil {
+		return err
+	}
+	return sum
 }
 
-func (ses *Ses) ExecCat(req Requester,
-	r io.Reader, args ...string) interface{} {
+func (ses *Ses) ExecCat(req Req, r io.Reader, args ...string) interface{} {
 	if len(args) == 0 {
 		return ErrUsageCat
 	}
-	ack, err := ses.ASN.NewAckSuccessPDUFile(req)
+	ack, err := ses.asn.NewAckSuccessPDUFile(req)
 	if err != nil {
 		return err
 	}
 	err = ses.Blobber(func(fn string) error {
+		if strings.HasSuffix(fn, filepath.FromSlash(AsnMark)) {
+			user, _ := ses.asn.repos.ParsePath(fn)
+			if user == nil {
+				return os.ErrNotExist
+			}
+			_, err := user.cache.Mark().WriteTo(ack)
+			return err
+		}
 		f, err := os.Open(fn)
 		if err != nil {
 			return err
@@ -342,18 +350,18 @@ func (ses *Ses) ExecClone(args ...string) interface{} {
 		return ErrUsageClone
 	} else if nargs == 1 {
 		var name string
-		after, name = StripTime(args[0])
+		after, name = ses.StripTime(args[0])
 		if name != "" {
 			return ses.execCloneRemote(after, name)
 		}
 	}
-	if dir, err = ioutil.ReadDir(ses.srv.cmd.Cfg.Dir); err != nil {
+	if dir, err = ioutil.ReadDir(ses.cfg.Dir); err != nil {
 		return err
 	}
 	defer func() { dir = nil }()
 	for _, fi := range dir {
 		if fi.IsDir() && len(fi.Name()) == 2 {
-			subdn := filepath.Join(ses.srv.cmd.Cfg.Dir, fi.Name())
+			subdn := filepath.Join(ses.cfg.Dir, fi.Name())
 			if subdir, err = ioutil.ReadDir(subdn); err != nil {
 				return err
 			}
@@ -362,7 +370,7 @@ func (ses *Ses) ExecClone(args ...string) interface{} {
 				if !fi.IsDir() && len(fi.Name()) == fnlen {
 					bt := BlobTime(fn)
 					if after.IsZero() || bt.After(after) {
-						ses.ASN.Tx(NewPDUFN(fn))
+						ses.asn.Tx(NewPDUFN(fn))
 					}
 				}
 			}
@@ -374,7 +382,7 @@ func (ses *Ses) ExecClone(args ...string) interface{} {
 
 func (ses *Ses) execCloneRemote(after time.Time, name string) interface{} {
 	var remote *Ses
-	ses.srv.ForEachSession(func(x *Ses) {
+	ses.ForEachLogin(func(x *Ses) {
 		if x.name == name {
 			remote = x
 		}
@@ -383,35 +391,31 @@ func (ses *Ses) execCloneRemote(after time.Time, name string) interface{} {
 		return errors.New("no remote session for " + name)
 	}
 	ls := NewPDUBuf()
-	v := ses.ASN.Version()
+	v := ses.asn.Version()
 	v.WriteTo(ls)
 	ExecReqId.Version(v).WriteTo(ls)
-	req := NextRequester()
+	req := NextReq()
 	req.WriteTo(ls)
 	if after.IsZero() {
 		fmt.Fprint(ls, "ls\x00~*")
 	} else {
 		fmt.Fprintf(ls, "ls\x00~*@%d", after.UnixNano())
 	}
-	ses.ASN.Acker.Map(req, remote.execCloneLsAck)
-	remote.ASN.Tx(ls)
+	ses.asn.acker.Map(req, remote.execCloneLsAck)
+	remote.asn.Tx(ls)
 	return nil
 }
 
-func (ses *Ses) execCloneLsAck(req Requester, ack *PDU) (err error) {
-	ses.ASN.Acker.UnMap(req)
-	if err = ses.ASN.ParseAckError(ack); err != nil {
-		return
-	}
-	tmp, err := ses.ASN.Repos.Tmp.NewFile()
+func (ses *Ses) execCloneLsAck(req Req, err error, ack *PDU) error {
+	ses.asn.acker.UnMap(req)
 	if err != nil {
-		return
+		return err
 	}
-	fetch := NewPDUFile(tmp)
-	v := ses.ASN.Version()
+	fetch := NewPDUFile(ses.asn.repos.tmp.New())
+	v := ses.asn.Version()
 	v.WriteTo(fetch)
 	ExecReqId.Version(v).WriteTo(fetch)
-	req = NextRequester()
+	req = NextReq()
 	req.WriteTo(fetch)
 	fmt.Fprintf(fetch, "fetch\x00-\x00")
 	scanner := bufio.NewScanner(ack)
@@ -419,14 +423,14 @@ func (ses *Ses) execCloneLsAck(req Requester, ack *PDU) (err error) {
 		fmt.Fprintln(fetch, scanner.Text())
 	}
 	scanner = nil
-	ses.ASN.Acker.Map(req, ses.execCloneFetchAck)
-	ses.ASN.Tx(fetch)
+	ses.asn.acker.Map(req, ses.execCloneFetchAck)
+	ses.asn.Tx(fetch)
 	return nil
 }
 
-func (ses *Ses) execCloneFetchAck(req Requester, ack *PDU) error {
-	ses.ASN.Acker.UnMap(req)
-	return ses.ASN.ParseAckError(ack)
+func (ses *Ses) execCloneFetchAck(req Req, err error, ack *PDU) error {
+	ses.asn.acker.UnMap(req)
+	return err
 }
 
 func (ses *Ses) ExecFetch(r io.Reader, args ...string) interface{} {
@@ -438,18 +442,33 @@ func (ses *Ses) ExecFetch(r io.Reader, args ...string) interface{} {
 		return ErrCantExec
 	}
 	err = ses.Blobber(func(fn string) error {
-		ses.ASN.Tx(NewPDUFN(fn))
+		if strings.HasSuffix(fn, filepath.FromSlash(AsnMark)) {
+			user, _ := ses.asn.repos.ParsePath(fn)
+			if user == nil {
+				ses.asn.Diag("no user for", fn)
+				return os.ErrNotExist
+			}
+			pdu := NewPDUBuf()
+			NewFH(&ses.user.key,
+				ses.cfg.Keys.Server.Pub.Encr,
+				AsnMark).WriteTo(pdu)
+			user.cache.Mark().WriteTo(pdu)
+			ses.asn.Fixme("sent cached", fn)
+			ses.asn.Tx(pdu)
+			return nil
+		}
+		ses.asn.Fixme("sent", fn)
+		ses.asn.Tx(NewPDUFN(fn))
 		return nil
 	}, r, args...)
 	return err
 }
 
-func (ses *Ses) ExecFilter(req Requester,
-	r io.Reader, args ...string) interface{} {
+func (ses *Ses) ExecFilter(req Req, r io.Reader, args ...string) interface{} {
 	if len(args) < 1 {
 		return ErrUsageFilter
 	}
-	ack, err := ses.ASN.NewAckSuccessPDUFile(req)
+	ack, err := ses.asn.NewAckSuccessPDUFile(req)
 	if err != nil {
 		return err
 	}
@@ -483,7 +502,7 @@ func (ses *Ses) ExecFilter(req Requester,
 	errDone := make(chan bool, 1)
 	go func() {
 		defer cmdStdin.Close()
-		Diag.Println("blobArgs:", strings.Join(blobArgs, " "))
+		ses.asn.Diag("blobArgs:", strings.Join(blobArgs, " "))
 		blobberErr <- ses.Blobber(func(fn string) error {
 			fmt.Fprintln(cmdStdin, fn)
 			return nil
@@ -511,7 +530,7 @@ func (ses *Ses) ExecFilter(req Requester,
 	return ack
 }
 
-func (ses *Ses) ExecGC(req Requester, args ...string) interface{} {
+func (ses *Ses) ExecGC(req Req, args ...string) interface{} {
 	var (
 		err     error
 		after   time.Time
@@ -525,18 +544,18 @@ func (ses *Ses) ExecGC(req Requester, args ...string) interface{} {
 		} else if arg == "-n" || arg == "--dry-run" {
 			dryrun = true
 		} else if strings.HasPrefix(arg, "@") {
-			after, _ = StripTime(arg)
+			after, _ = ses.StripTime(arg)
 		} else {
 			return ErrUsageGC
 		}
 	}
 	if dryrun || verbose {
-		ack, err = ses.ASN.NewAckSuccessPDUFile(req)
+		ack, err = ses.asn.NewAckSuccessPDUFile(req)
 		if err != nil {
 			return err
 		}
 	}
-	err = ses.srv.repos.Filter(after, func(fn string) error {
+	err = ses.asn.repos.Filter(after, func(fn string) error {
 		var st syscall.Stat_t
 		if err := syscall.Stat(fn, &st); err != nil {
 			return err
@@ -569,15 +588,15 @@ func (ses *Ses) ExecIam(args ...string) interface{} {
 	return nil
 }
 
-func (ses *Ses) ExecLS(req Requester,
+func (ses *Ses) ExecLS(req Req,
 	r io.Reader, args ...string) interface{} {
-	ack, err := ses.ASN.NewAckSuccessPDUFile(req)
+	ack, err := ses.asn.NewAckSuccessPDUFile(req)
 	if err != nil {
 		return err
 	}
-	slogin := ses.Keys.Client.Login.String()
+	slogin := ses.Keys.Client.Login.FullString()
 	err = ses.Blobber(func(fn string) error {
-		if ref := ses.srv.repos.FN2Ref(slogin, fn); ref != "" {
+		if ref := ses.asn.repos.FN2Ref(slogin, fn); ref != "" {
 			fmt.Fprintln(ack, ref)
 		}
 		return nil
@@ -591,59 +610,57 @@ func (ses *Ses) ExecLS(req Requester,
 }
 
 // ExecMark without args (or just -u USER) sets the login or given
-// user sets mark to an ephemeral place.
+// user sets mark to [ 0.0, 0.0 ] (in the Gulf of Guinea)
 func (ses *Ses) ExecMark(args ...string) interface{} {
-	author := ses.srv.repos.Users.Search(&ses.Keys.Client.Login)
-	owner := author
+	var err error
 	defer func() {
-		author = nil
-		owner = nil
+		if err != nil {
+			ses.asn.Diag(debug.Depth(2), err)
+		}
 	}()
-	var m Mark
-	if len(args) > 2 && args[0] == "-u" {
-		owner = ses.srv.repos.Users.Search(args[1])
-		if owner == nil {
-			return ErrNOENT
+	user := ses.user
+	if len(args) >= 2 && args[0] == "-u" {
+		user = ses.asn.repos.users.UserString(args[1])
+		if user == nil {
+			err = ErrNOENT
+			return err
 		}
 		args = args[2:]
 	}
-	if nargs := len(args); nargs == 1 {
-		if len(args[0]) < 6 || args[0][0] != '7' {
-			return ErrUsageMark
+	switch len(args) {
+	default:
+		if err = os.ErrInvalid; err != nil {
+			return err
 		}
-		place := ses.srv.repos.Users.Search(args[0][2:])
-		if place == nil {
-			return ErrNOENT
+	case 0:
+		if err = user.cache.Mark().Set(MarkLoc{}); err != nil {
+			return err
 		}
-		kplace, err := NewPubEncrString(place.String)
+	case 1:
+		if err = user.cache.Mark().Set(args[0]); err != nil {
+			return err
+		}
+	case 2:
+		var loc *MarkLoc
+		if loc, err = NewMarkLoc(args...); err != nil {
+			return err
+		} else if err = user.cache.Mark().Set(loc); err != nil {
+			return err
+		}
+	}
+	user.cache[AsnMark].Set(ses.asn.time.out)
+	if !user.IsActual() {
+		var sum *Sum
+		b := &bytes.Buffer{}
+		b.Write(user.key[:MarkeySz])
+		b.Write(user.cache.Mark().Bytes())
+		sum, err = ses.Store(user, ses.user, AsnMark, b)
 		if err != nil {
 			return err
 		}
-		defer func() { kplace = nil }()
-		err = m.SetPlace(owner.Key, kplace, args[0][:2])
-		if err != nil {
-			return err
-		}
-	} else if nargs == 2 {
-		if err := m.SetLL(owner.Key, args...); err != nil {
-			return err
-		}
-	} else {
-		place := &ses.Keys.Client.Ephemeral
-		if err := m.SetPlace(owner.Key, place, "70"); err != nil {
-			return err
-		}
+		return sum
 	}
-	v := ses.NewBlob(owner, author, "asn/mark", m)
-	if err, _ := v.(error); err != nil {
-		return err
-	}
-	if owner.ASN.User != "actual" || owner.ASN.User != "" {
-		ses.NewBlob(owner, author, "asn/mark-server",
-			ses.srv.cmd.Cfg.Name)
-	}
-	owner.ASN.MarkServer = ses.srv.cmd.Cfg.Name
-	return v
+	return nil
 }
 
 func (ses *Ses) ExecNewUser(args ...string) interface{} {
@@ -657,12 +674,7 @@ func (ses *Ses) ExecNewUser(args ...string) interface{} {
 	if len(args) != 1 {
 		return ErrUsageNewUser
 	}
-	author := ses.srv.repos.Users.Search(&ses.Keys.Client.Login)
-	owner := author
-	defer func() {
-		author = nil
-		owner = nil
-	}()
+	owner := ses.user
 	k, err := NewRandomUserKeys()
 	if err != nil {
 		return err
@@ -670,32 +682,34 @@ func (ses *Ses) ExecNewUser(args ...string) interface{} {
 	defer func() {
 		k.Free()
 	}()
-	owner, err = ses.srv.repos.NewUser(k.Pub.Encr.String())
+	author := ses.user
+	owner, err = ses.asn.repos.NewUser(k.Pub.Encr)
 	if err != nil {
 		return err
 	}
 	if author == nil {
 		author = owner
 	}
-	v := ses.NewBlob(owner, author, "asn/auth", []byte(k.Pub.Auth[:]))
-	if err, _ := v.(error); err != nil {
+	_, err = ses.Store(owner, ses.user, AsnAuth, k.Pub.Auth)
+	if err != nil {
 		return err
 	}
-	v = ses.NewBlob(owner, author, "asn/author", []byte(author.Key[:]))
-	if err, _ := v.(error); err != nil {
+	_, err = ses.Store(owner, ses.user, AsnAuthor, &author.key)
+	if err != nil {
 		return err
 	}
-	v = ses.NewBlob(owner, author, "asn/user", args[0])
-	if err, _ := v.(error); err != nil {
+	_, err = ses.Store(owner, ses.user, AsnUser,
+		bytes.NewBufferString(args[0]))
+	if err != nil {
 		return err
 	}
 	// copy author also?
-	copy(owner.ASN.Auth[:], k.Pub.Auth[:])
+	owner.cache.Auth().Set(k.Pub.Auth)
 	if isBinary {
 		// Ack keys for new user in binary.
-		out := append(k.Sec.Encr[:], k.Sec.Auth[:]...)
-		out = append(out, k.Pub.Encr[:]...)
-		out = append(out, k.Pub.Auth[:]...)
+		out := append(k.Sec.Encr[:], k.Sec.Auth.Bytes()...)
+		out = append(out, k.Pub.Encr.Bytes()...)
+		out = append(out, k.Pub.Auth.Bytes()...)
 		return out
 	}
 	out, err := yaml.Marshal(k)
@@ -710,87 +724,82 @@ func (ses *Ses) ExecObjDump(r io.Reader, args ...string) interface{} {
 	if len(args) < 1 {
 		return ErrUsageObjDump
 	}
-	err := ses.Blobber(func(fn string) error {
+	if err := ses.Blobber(func(fn string) (err error) {
+		defer func() {
+			if err != nil {
+				ses.asn.Diag(debug.Depth(2), err)
+			}
+		}()
+		if strings.HasSuffix(fn, filepath.FromSlash(AsnMark)) {
+			user, _ := ses.asn.repos.ParsePath(fn)
+			if user == nil {
+				err = os.ErrNotExist
+				return
+			}
+			mark := user.cache.Mark()
+			fmt.Fprintln(out, "cached:", AsnMark)
+			fmt.Fprintln(out, "owner:", user)
+			fmt.Fprintln(out, mark)
+			return
+		}
 		f, err := os.Open(fn)
 		if err != nil {
-			return err
+			return
 		}
 		defer f.Close()
 		sum := NewSumOf(f)
-		f.Seek(BlobOff, os.SEEK_SET)
+		f.Seek(BlobMagicOff, os.SEEK_SET)
 		blob, err := NewBlobFrom(f)
 		if err != nil {
-			return err
+			return
 		}
 		pos, _ := f.Seek(0, os.SEEK_CUR)
 		fi, _ := f.Stat()
-		fmt.Fprintln(out, "name:", blob.Name)
-		fmt.Fprintln(out, "sum:", sum.String())
-		fmt.Fprintln(out, "owner:", blob.Owner.String())
-		fmt.Fprintln(out, "author:", blob.Author.String())
-		fmt.Fprintln(out, "time:", blob.RFC822Z())
-		fmt.Fprintln(out, "unix nano:", blob.Time.UnixNano())
+		fmt.Fprintln(out, "sum:", sum)
+		fmt.Fprintln(out, blob)
 		fmt.Fprintln(out, "size:", fi.Size())
 		fmt.Fprintln(out, "len:", fi.Size()-pos)
 		switch blob.Name {
-		case "asn/auth":
+		case AsnAuth:
 			var auth PubAuth
 			f.Read(auth[:])
-			fmt.Fprintln(out, "asn/auth:", auth.String())
-		case "asn/author":
+			fmt.Fprintln(out, "auth:", auth)
+		case AsnAuthor:
 			var author PubEncr
 			f.Read(author[:])
-			fmt.Fprintln(out, "asn/author:", author.String())
-		case MarkFN:
-			var m Mark
-			m.ReadFrom(f)
-			fmt.Fprintln(out, "key:", m.Key.String())
-			if m.IsPlace() {
-				fmt.Fprintln(out, "place:", m.Place().String())
-				if eta := m.ETA(); eta != 0 {
-					fmt.Fprintln(out, "eta:", eta)
-				}
-			} else {
-				ll := m.LL()
-				fmt.Fprintf(out, "lat: %0.6f\n", ll.Lat)
-				fmt.Fprintf(out, "lon: %0.6f\n", ll.Lon)
-			}
-		case "asn/user":
-			fmt.Fprint(out, "asn/user: ")
+			fmt.Fprintln(out, "author:", author)
+		case AsnUser:
+			fmt.Fprintf(out, "user: ")
 			io.Copy(out, f)
 			fmt.Fprintln(out)
 		}
-		return nil
-	}, r, args...)
-	if err != nil {
+		return
+	}, r, args...); err != nil {
+		ses.asn.Diag(err)
 		out = nil
 		return err
 	}
-	b := out.Bytes()
-	out = nil
-	return b
+	return out
 }
 
 func (ses *Ses) ExecRM(r io.Reader, args ...string) interface{} {
 	buf := &bytes.Buffer{}
-	author := ses.srv.repos.Users.Search(&ses.Keys.Client.Login)
-	owner := author
-	defer func() {
-		buf = nil
-		author = nil
-		owner = nil
-	}()
+	owner := ses.user
 	if len(args) < 1 {
 		return ErrUsageRM
 	}
 	err := ses.Blobber(func(fn string) error {
-		fmt.Fprintln(buf, ses.srv.repos.DePrefix(fn))
+		fmt.Fprintln(buf, ses.asn.repos.DePrefix(fn))
 		return nil
 	}, r, args...)
 	if err != nil {
 		return err
 	}
-	return ses.NewBlob(owner, author, "asn/removals/", buf)
+	sum, err := ses.Store(owner, ses.user, AsnRemovals, buf)
+	if err != nil {
+		return err
+	}
+	return sum
 }
 
 func (ses *Ses) ExecTrace(args ...string) interface{} {
@@ -801,8 +810,9 @@ func (ses *Ses) ExecTrace(args ...string) interface{} {
 	}
 	switch cmd {
 	case "flush":
-		return TraceFlush
+		return debug.Trace
 	case "filter", "unfilter", "resize":
+		ses.asn.Fixme(cmd)
 		return ErrFIXME
 	default:
 		return ErrUsageTrace
@@ -813,66 +823,105 @@ func (ses *Ses) ExecUsers(args ...string) interface{} {
 	if len(args) != 0 {
 		return ErrUsageUsers
 	}
-	return ses.srv.repos.Users.LS()
+	return ses.asn.repos.users.LS()
 }
 
 func (ses *Ses) ExecVouch(args ...string) interface{} {
 	if len(args) != 2 {
 		return ErrUsageVouch
 	}
-	author := ses.srv.repos.Users.Search(&ses.Keys.Client.Login)
-	owner := ses.srv.repos.Users.Search(args[0])
+	owner := ses.asn.repos.users.UserString(args[0])
 	if owner == nil {
 		return ErrNOENT
 	}
-	defer func() {
-		author = nil
-		owner = nil
-	}()
-	sig, err := hex.DecodeString(args[1])
+	sig, err := NewSignatureString(args[1])
 	if err != nil {
 		return err
 	}
-	if len(sig) != SignatureSz {
-		return os.ErrInvalid
+	sum, err := ses.Store(owner, ses.user, AsnVouchers, sig)
+	if err != nil {
+		return err
 	}
-	return ses.NewBlob(owner, author, "asn/vouchers/", sig)
+	return sum
 }
 
-func (ses *Ses) ExecWho(req Requester, args ...string) interface{} {
+func (ses *Ses) ExecWho(req Req, args ...string) interface{} {
 	if len(args) != 0 {
 		return ErrUsageWho
 	}
-	ack, err := ses.ASN.NewAckSuccessPDUFile(req)
+	ack, err := ses.asn.NewAckSuccessPDUFile(req)
 	if err != nil {
 		return err
 	}
-	ses.srv.ForEachSession(func(x *Ses) {
+	ses.ForEachLogin(func(x *Ses) {
 		if x.name != "" {
 			fmt.Fprintln(ack, x.name)
 		} else {
-			fmt.Fprintln(ack, x.Keys.Client.Login.String()[:16])
+			fmt.Fprintln(ack, &x.Keys.Client.Login)
 		}
 	})
 	return ack
 }
 
-func (ses *Ses) Blobber(f func(fn string) error, r io.Reader,
+func (ses *Ses) Blobber(filter func(fn string) error, r io.Reader,
 	args ...string) (err error) {
-	repos := ses.srv.repos
-	name := ses.srv.cmd.Cfg.Name
-	login := repos.Users.Search(&ses.Keys.Client.Login)
-	var (
-		after     time.Time
-		glob      string
-		mustExist bool
-	)
-	uf := func(u *ReposUser) error {
+	var this time.Time
+	var umatch, glob string
+	var mustExist bool
+	var scanner *bufio.Scanner
+	repos := ses.asn.repos
+	filterIfNewer := func(fn string) error {
+		if this.IsZero() {
+			return filter(fn)
+		} else if fh, err := ReadFileHeader(fn); err != nil {
+			return err
+		} else if fh.Blob.Time.After(this) {
+			return filter(fn)
+		}
+		return nil
+	}
+	walker := func(fn string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			return filterIfNewer(fn)
+		}
+		return err
+	}
+	uf := func(u *User) error {
 		if u == nil {
 			return ErrNOENT
 		}
-		xn := repos.Expand(u.String, glob)
-		matches, err := filepath.Glob(xn)
+		if umatch != "" {
+			uglob := repos.Join(u.Join(umatch))
+			matches, err := filepath.Glob(uglob)
+			if err != nil {
+				return err
+			}
+			if len(matches) == 0 {
+				return nil
+			}
+			matches = nil
+		}
+		mfn := repos.Join(u.Join(AsnMark))
+		mt := u.cache[AsnMark].Time
+		if glob == AsnMark {
+			if mt.IsZero() {
+				return os.ErrNotExist
+			}
+			if mt.After(this) {
+				return filter(mfn)
+			}
+			return nil
+		}
+		if glob == "*" {
+			if !mt.IsZero() && mt.After(this) {
+				if err = filter(mfn); err != nil {
+					return err
+				}
+			}
+		}
+		uglob := repos.Join(u.Join(glob))
+		matches, err := filepath.Glob(uglob)
+		defer func() { matches = nil }()
 		if err != nil {
 			return err
 		}
@@ -880,110 +929,97 @@ func (ses *Ses) Blobber(f func(fn string) error, r io.Reader,
 			return os.ErrNotExist
 		}
 		for _, match := range matches {
-			if err = BlobFilter(match, after, f); err != nil {
+			if err = filepath.Walk(match, walker); err != nil {
 				return err
 			}
 		}
-		return nil
+		return err
 	}
 	if len(args) == 0 {
 		args = []string{""}
 	}
-	for _, arg := range args {
-		after, arg = StripTime(arg)
-		_, staterr := os.Stat(arg)
+	for err == nil {
+		var arg string
+		umatch, glob, mustExist = "", "", false
+		if scanner != nil {
+			if !scanner.Scan() {
+				scanner = nil
+				continue
+			}
+			arg = scanner.Text()
+		} else if len(args) == 0 {
+			break
+		} else {
+			arg = args[0]
+			args = args[1:]
+		}
+		this, arg = ses.StripTime(arg)
+		fi, staterr := os.Stat(arg)
+		if arg == "asn" && !fi.IsDir() {
+			fi = nil
+		}
 		slash := strings.Index(arg, "/")
+		closeParen := strings.Index(arg, ")")
 		switch {
 		default:
 			glob, mustExist = arg, true
-			err = uf(login)
+			err = uf(ses.user)
+		case staterr == nil && fi != nil:
+			err = filterIfNewer(arg)
+		case arg == "-":
+			scanner = bufio.NewScanner(r)
 		case arg == "", arg == "~", arg == "*":
-			glob, mustExist = "*", false
-			err = uf(login)
+			glob = "*"
+			err = uf(ses.user)
 		case arg[0:2] == "~/":
 			glob, mustExist = arg[2:], true
-			err = uf(login)
-		case arg == "-":
-			err = ses.blobberRecurse(f, r)
+			err = uf(ses.user)
 		case arg == "$*":
-			err = repos.Filter(after, f)
+			err = repos.Filter(this, filter)
 		case arg[0] == '$':
 			match, err := repos.Search(arg[1:])
 			if err == nil {
 				if match == "" {
 					err = ErrNOENT
 				} else {
-					err = BlobFilter(match, after, f)
+					err = filepath.Walk(match, walker)
 				}
 			}
 		case arg == "~*":
-			glob, mustExist = "*", false
-			err = repos.Users.ForEachUser(uf)
-		case arg == "~.":
-			glob, mustExist = "*", false
-			err = repos.Users.ForEachUserOn(name, uf)
+			glob = "*"
+			err = repos.users.ForEachUser(uf)
 		case arg[0:3] == "~*/":
-			glob, mustExist = arg[3:], false
-			err = repos.Users.ForEachUser(uf)
+			glob = arg[3:]
+			err = repos.users.ForEachUser(uf)
+		case arg == "~.":
+			glob = "*"
+			err = repos.users.ForEachLoggedInUser(uf)
 		case arg[0:3] == "~./":
-			glob, mustExist = arg[3:], false
-			err = repos.Users.ForEachUserOn(name, uf)
+			glob = arg[3:]
+			err = repos.users.ForEachLoggedInUser(uf)
+		case arg[0:2] == "~(" && closeParen > 0:
+			umatch, glob = arg[2:closeParen], arg[closeParen+1:]
+			err = repos.users.ForEachLoggedInUser(uf)
 		case arg[0] == '~' && slash < 0:
 			glob, mustExist = "*", true
-			err = uf(repos.Users.Search(arg[1:]))
+			err = uf(repos.users.UserString(arg[1:]))
 		case arg[0] == '~' && slash > 0:
 			glob, mustExist = arg[slash+1:], true
-			err = uf(repos.Users.Search(arg[1:slash]))
-		case staterr == nil:
-			err = BlobFilter(arg, after, f)
-		}
-		if err != nil {
-			return err
+			err = uf(repos.users.UserString(arg[1:slash]))
 		}
 	}
-	return nil
+	return
 }
 
-// blobberRecurse reruns Blobber with reference of each input line.
-func (ses *Ses) blobberRecurse(f func(fn string) error, r io.Reader) error {
-	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		xarg := scanner.Text()
-		if xarg != "-" { // only one level recursion
-			err := ses.Blobber(f, nil, xarg)
-			if err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func (ses *Ses) NewBlob(owner, author *ReposUser, name string,
-	v interface{}) interface{} {
-	blob := NewBlob(owner.Key, author.Key, name, ses.ASN.Time.Out)
-	defer func() {
-		blob.Free()
-		blob = nil
-	}()
-	sum, fn, err := ses.srv.repos.File(blob, v)
-	if err != nil {
-		Diag.Println(err)
-		return err
-	}
-	links, err := ses.srv.repos.MkLinks(blob, sum, fn)
-	if err != nil {
-		Diag.Println(err)
-		return err
-	}
-	ses.removals(links)
-	ses.dist(links)
-	links = nil
-	return sum
+func (ses *Ses) Store(owner, author *User, name string, wt WriteToer) (*Sum,
+	error) {
+	blob := NewBlobWith(&owner.key, &author.key, name, ses.asn.time.out)
+	defer blob.Free()
+	return ses.asn.repos.Store(ses, Latest, blob, wt)
 }
 
 // StripTime removes '@TIME' argument suffixes
-func StripTime(arg string) (t time.Time, argWoTime string) {
+func (ses *Ses) StripTime(arg string) (t time.Time, argWoTime string) {
 	argWoTime = arg
 	if at := strings.Index(arg, "@"); at >= 0 {
 		var nano int64
@@ -991,7 +1027,7 @@ func StripTime(arg string) (t time.Time, argWoTime string) {
 		if arg[at+1] == '+' || arg[at+1] == '-' {
 			d, err := time.ParseDuration(arg[at+2:])
 			if err != nil {
-				Diag.Println("invalid duration:", err)
+				ses.asn.Diag("invalid duration:", err)
 				return
 			}
 			if arg[at+1] == '-' {
@@ -1004,7 +1040,6 @@ func StripTime(arg string) (t time.Time, argWoTime string) {
 		if n == 1 && err == nil {
 			isec := int64(time.Second)
 			t = time.Unix(nano/isec, nano%isec)
-			Diag.Println(t.Format(time.RFC3339))
 			return
 		}
 		for _, layout := range []string{
@@ -1022,7 +1057,6 @@ func StripTime(arg string) (t time.Time, argWoTime string) {
 			pt, err := time.Parse(layout, arg[at+1:])
 			if err == nil {
 				t = pt
-				Diag.Println(t.Format(time.RFC3339))
 				return
 			}
 		}

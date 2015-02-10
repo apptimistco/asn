@@ -2,10 +2,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// +build !nolog
+// +build pdu
 
 package main
 
-var Log = &Logger{}
+import "github.com/apptimistco/asn/debug"
 
-func init() { Log.Init() }
+func init() {
+	PduDiag = debug.Diag
+}
