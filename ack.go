@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"time"
 )
 
 // AckerF is an Acknowledgment handler for the given request and trailing Ack
@@ -56,6 +57,9 @@ func (asn *ASN) AckerRx(pdu *PDU) (err error) {
 	if _, err = req.ReadFrom(pdu); err != nil {
 		return
 	}
+	if _, err = (NBOReader{pdu}).ReadNBO(&asn.Time.In); err != nil {
+		return
+	}
 	asn.Acker.mutex.Lock()
 	f := asn.Acker.fmap[req]
 	asn.Acker.mutex.Unlock()
@@ -92,6 +96,7 @@ func (asn *ASN) Ack(req Requester, argv ...interface{}) {
 	v.WriteTo(ack)
 	AckReqId.Version(v).WriteTo(ack)
 	req.WriteTo(ack)
+	(NBOWriter{ack}).WriteNBO(asn.Time.Out)
 	if err != nil {
 		asn.Trace("tx", AckReqId, req, err)
 		ErrFromError(err).Version(v).WriteTo(ack)
@@ -121,11 +126,13 @@ func AckOut(w io.Writer, argv ...interface{}) {
 					v   Version
 					id  Id
 					req Requester
+					rxt time.Time
 					ec  Err
 				)
 				v.ReadFrom(t)
 				id.ReadFrom(t)
 				req.ReadFrom(t)
+				(NBOReader{t}).ReadNBO(&rxt)
 				ec.ReadFrom(t)
 				if ec != Success {
 					w.Write([]byte("Error: "))
@@ -167,6 +174,7 @@ func (asn *ASN) NewAckSuccessPDUFile(req Requester) (ack *PDU, err error) {
 	v.WriteTo(ack)
 	AckReqId.Version(v).WriteTo(ack)
 	req.WriteTo(ack)
+	(NBOWriter{ack}).WriteNBO(asn.Time.Out)
 	Success.Version(v).WriteTo(ack)
 	return
 }

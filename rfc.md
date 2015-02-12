@@ -181,6 +181,7 @@ Each request is acknowledged by this `AckReq`.
     version = uint8{ 0 }
     id = uint8{ AckReqId }
     requester = [8]uint8
+    epoch = uint64	// Unix epoch (nanoseconds)
     result = uint8
     data = []uint8
 
