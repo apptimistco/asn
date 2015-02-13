@@ -268,7 +268,7 @@ func (ses *Ses) ExecBlob(r io.Reader, args ...string) interface{} {
 	}
 	name := args[0]
 	if args[0][0] == '~' {
-		slash := strings.Index(args[0][1:], "/")
+		slash := strings.Index(args[0][:], "/")
 		if slash < 0 {
 			slash = len(name)
 			name = ""
