@@ -167,10 +167,7 @@ func (srv *Server) Free(ses *Ses) {
 
 func (srv *Server) handler(conn net.Conn) {
 	ses := srv.newSes()
-	defer func() {
-		ses.ASN.SetStateClosed()
-		srv.Free(ses)
-	}()
+	defer func() { srv.Free(ses) }()
 	ses.ASN.SetConn(conn)
 	conn.Read(ses.Keys.Client.Ephemeral[:])
 	ses.ASN.Println("connected",
