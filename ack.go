@@ -99,13 +99,13 @@ func (asn *ASN) Ack(req Requester, argv ...interface{}) {
 	(NBOWriter{ack}).WriteNBO(asn.Time.Out)
 	if err != nil {
 		asn.Trace("tx", AckReqId, req, err)
+		asn.Diag("nack", err)
 		ErrFromError(err).Version(v).WriteTo(ack)
 		if len(argv) > 0 {
 			AckOut(ack, argv...)
 		} else {
 			ack.Write([]byte(err.Error()))
 		}
-		asn.Diag("nack")
 	} else {
 		asn.Trace("tx", AckReqId, req, Success)
 		Success.Version(v).WriteTo(ack)

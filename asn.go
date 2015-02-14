@@ -182,11 +182,7 @@ func (asn *ASN) pdurx() {
 		}
 		pdu.Free()
 		asn.RxQ <- nil
-		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-			asn.Diag("pdurx", err)
-		} else {
-			asn.Diag("pdurx", "quit")
-		}
+		asn.Diag("pdurx quit", err)
 	}()
 	for {
 		var l uint16
