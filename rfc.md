@@ -312,8 +312,8 @@ characters to match repository names (e.g. `asn/hel*` for `asn/hello`)
 TIME is a UTF-8 decimal or '0x' prefaced hexadecimal encoding of the 64-bit
 integer nanoseconds since the Unix epoch (00:00:00.000000 Jan 1, 1970).
 TIME may also be an ANSIC, Unix, or RFC{822,850,1123,3339} formatted string.
-TIME may even be expressed in terms of duration since now; for example:
-"1h", "30m" or "1h30m".
+TIME may even be expressed in terms of duration since now with a '+' or '-'
+prefix; for example: "+1h", "-30m" or "+1h30m".
 
 ### approve ###
     approve BLOB...

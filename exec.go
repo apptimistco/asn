@@ -980,13 +980,16 @@ func StripTime(arg string) (t time.Time, argWoTime string) {
 	if at := strings.Index(arg, "@"); at >= 0 {
 		var nano int64
 		argWoTime = arg[:at]
-		d, err := time.ParseDuration(arg[at+1:])
-		if err == nil {
-			if d > 0 {
+		if arg[at+1] == '+' || arg[at+1] == '-' {
+			d, err := time.ParseDuration(arg[at+2:])
+			if err != nil {
+				Diag.Println("invalid duration:", err)
+				return
+			}
+			if arg[at+1] == '-' {
 				d = -d
 			}
 			t = time.Now().Add(d)
-			Diag.Println(t.Format(time.RFC3339))
 			return
 		}
 		n, err := fmt.Sscan(arg[at+1:], &nano)
