@@ -131,6 +131,12 @@ func (ses *Ses) RxExec(pdu *PDU) error {
 	if err != nil {
 		return err
 	}
+	if n == len(cmd) {
+		err := errors.New("command too long")
+		Diag.Println(err)
+		ses.ASN.Ack(req, err)
+		return nil
+	}
 	if i := bytes.Index(cmd[:n], []byte(demarcation)); i > 0 {
 		args = strings.Split(string(cmd[:i+1]), "\x00")
 		pdu.Rseek(int64((i-n)+len(demarcation)), os.SEEK_CUR)
