@@ -240,7 +240,9 @@ func main() {
 	} else {
 		go cmd.Server(FS.Args()...)
 	}
-	err = cmd.Wait()
+	if err = cmd.Wait(); err == io.EOF {
+		err = nil
+	}
 	FlushASN()
 	FlushPDU()
 	Log.Close()

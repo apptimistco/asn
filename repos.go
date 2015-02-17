@@ -42,7 +42,7 @@ type ReposTmp struct {
 	mutex *sync.Mutex
 }
 
-func (tmp *ReposTmp) free() {
+func (tmp *ReposTmp) Free() {
 	if tmp == nil {
 		return
 	}
@@ -89,7 +89,7 @@ func (user *ReposUser) expand(elements ...string) string {
 	return path
 }
 
-func (user *ReposUser) free() {
+func (user *ReposUser) Free() {
 	if user != nil {
 		return
 	}
@@ -133,12 +133,12 @@ func (users *ReposUsers) ForEachUserOn(server string,
 	return
 }
 
-func (users *ReposUsers) free() {
+func (users *ReposUsers) Free() {
 	if users == nil {
 		return
 	}
 	for i, e := range users.Entry {
-		e.free()
+		e.Free()
 		users.Entry[i] = nil
 	}
 	users.Entry = nil
@@ -193,18 +193,38 @@ type Repos struct {
 }
 
 func NewRepos(dn string) (repos *Repos, err error) {
+	tmpDN := dn + reposPS + "tmp"
+	tmpDir, err := ioutil.ReadDir(tmpDN)
+	if err == nil {
+		// flush hanging tmp files
+		for _, fi := range tmpDir {
+			syscall.Unlink(fi.Name())
+		}
+		tmpDir = nil
+	} else if os.IsNotExist(err) {
+		if err = os.MkdirAll(tmpDN, ReposPerm); err != nil {
+			return
+		}
+	}
+	repos = &Repos{
+		DN: dn,
+		Tmp: &ReposTmp{
+			DN:    tmpDN,
+			i:     0,
+			mutex: &sync.Mutex{},
+		},
+		Users: &ReposUsers{
+			mutex: &sync.Mutex{},
+		},
+	}
 	defer func() {
-		if perr := recover(); perr != nil {
-			err = perr.(error)
+		if r := recover(); r != nil {
+			err = r.(error)
 			repos.Free()
 			repos = nil
 		}
 	}()
-	repos = &Repos{
-		DN: dn,
-	}
-	repos.newTmp()
-	repos.newUsers()
+	repos.LoadUsers()
 	return
 }
 
@@ -408,8 +428,8 @@ func (repos *Repos) Free() {
 	if repos == nil {
 		return
 	}
-	repos.Tmp.free()
-	repos.Users.free()
+	repos.Tmp.Free()
+	repos.Users.Free()
 	repos.Tmp = nil
 	repos.Users = nil
 }
@@ -625,27 +645,6 @@ func (repos *Repos) Join(elements ...string) string {
 	return repos.DN + reposPS + filepath.Join(elements...)
 }
 
-func (repos *Repos) newTmp() {
-	tmpDN := repos.Join("tmp")
-	x, err := ioutil.ReadDir(tmpDN)
-	if err == nil {
-		// flush hanging tmp files
-		for _, fi := range x {
-			syscall.Unlink(fi.Name())
-		}
-		x = nil
-	} else if os.IsNotExist(err) {
-		if err = os.MkdirAll(tmpDN, ReposPerm); err != nil {
-			panic(err)
-		}
-	}
-	repos.Tmp = &ReposTmp{
-		DN:    tmpDN,
-		i:     0,
-		mutex: new(sync.Mutex),
-	}
-}
-
 // NewUser creates a cached user and repos directory
 func (repos *Repos) NewUser(v interface{}) (user *ReposUser, err error) {
 	defer func() {
@@ -698,10 +697,7 @@ func (repos *Repos) newUser(v interface{}) *ReposUser {
 	return user
 }
 
-func (repos *Repos) newUsers() {
-	repos.Users = &ReposUsers{
-		mutex: new(sync.Mutex),
-	}
+func (repos *Repos) LoadUsers() {
 	var (
 		topdir []os.FileInfo
 		subdir []os.FileInfo

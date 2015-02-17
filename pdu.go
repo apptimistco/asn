@@ -6,7 +6,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -55,7 +54,7 @@ func newPDU() (pdu *PDU) {
 		pdu = new(PDU)
 	}
 	pdu.ref = 1
-	Diag.Output(3, fmt.Sprintf("new pdu %p\n", pdu))
+	// Diag.Output(3, fmt.Sprintf("new pdu %p\n", pdu))
 	return
 }
 
@@ -147,7 +146,7 @@ func (pdu *PDU) Free() {
 	if pdu.deref() > 0 {
 		return
 	}
-	Diag.Output(2, fmt.Sprintf("free pdu %p\n", pdu))
+	// Diag.Output(2, fmt.Sprintf("free pdu %p\n", pdu))
 	if pdu.File != nil {
 		pdu.File.Close()
 		pdu.File = nil
