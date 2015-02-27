@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"sync"
 	"time"
 
@@ -48,13 +49,17 @@ func (cmd *Command) Server(args ...string) {
 		mutex:     &sync.Mutex{},
 	}
 	err := cmd.Cfg.Check(ServerMode)
+	defer func() { cmd.Done <- err }()
 	if err != nil {
-		goto egress
+		runtime.Goexit()
 	}
 	if srv.repos, err = NewRepos(srv.cmd.Cfg.Dir); err != nil {
-		goto egress
+		runtime.Goexit()
 	}
-	defer srv.repos.Free()
+	defer func() {
+		srv.repos.Free()
+		srv.repos = nil
+	}()
 	for _, k := range []*UserKeys{
 		srv.cmd.Cfg.Keys.Admin,
 		srv.cmd.Cfg.Keys.Server,
@@ -63,7 +68,7 @@ func (cmd *Command) Server(args ...string) {
 		if user == nil {
 			user, err = srv.repos.NewUser(k.Pub.Encr)
 			if err != nil {
-				goto egress
+				runtime.Goexit()
 			}
 			user.ASN.Auth = *k.Pub.Auth
 			user.ASN.Author = *k.Pub.Encr
@@ -81,36 +86,29 @@ func (cmd *Command) Server(args ...string) {
 		err, _ = v.(error)
 		AckOut(cmd.Out, v)
 		v = nil
-	} else {
-		if err = srv.Listen(); err == nil {
-			cmd.In.Close()
-			cmd.Out.Close()
-			// FIXME should we close or os.Stderr?
-			Log.Println("started", cmd.Cfg.Name,
-				"with", len(srv.listeners), "listener(s)")
-			for {
-				sig := <-srv.cmd.Sig
-				Diag.Println("caught", sig)
-				if IsINT(sig) || IsTERM(sig) {
-					TraceFlush(Diag)
-					srv.Close()
-					if IsINT(sig) {
-						srv.Hangup()
-						break
-					}
-				} else if IsUSR1(sig) {
-					TraceFlush(Log)
-				}
-			}
-			Log.Println("stopped", cmd.Cfg.Name)
+		runtime.Goexit()
+	}
+	if err = srv.Listen(); err != nil {
+		runtime.Goexit()
+	}
+	cmd.In.Close()
+	cmd.Out.Close()
+	// FIXME should we close os.Stderr?
+	for {
+		sig := <-srv.cmd.Sig
+		Diag.Println("caught", sig)
+		switch {
+		case IsINT(sig):
+			TraceFlush(Diag)
+			srv.Close()
+			srv.Hangup()
+			runtime.Goexit()
+		case IsTERM(sig):
+			srv.Close()
+		case IsUSR1(sig):
+			TraceFlush(Log)
 		}
 	}
-egress:
-	if err != nil {
-		Log.Println("ERROR:", cmd.Cfg.Name, err)
-		Diag.Println("oops", err)
-	}
-	cmd.Done <- err
 }
 
 func (srv *Server) AddListener(l *SrvListener) {
@@ -145,55 +143,63 @@ func (srv *Server) ForEachSession(f func(*Ses)) {
 	srv.mutex.Lock()
 	defer srv.mutex.Unlock()
 	for _, ses := range srv.sessions {
-		f(ses)
-	}
-}
-
-func (srv *Server) Free(ses *Ses) {
-	ses.ExecMutex.Lock()
-	ses.ExecMutex.Unlock()
-	srv.mutex.Lock()
-	defer srv.mutex.Unlock()
-	ses.Free()
-	for i := range srv.sessions {
-		if srv.sessions[i] == ses {
-			copy(srv.sessions[i:], srv.sessions[i+1:])
-			srv.sessions[len(srv.sessions)-1] = nil
-			srv.sessions = srv.sessions[:len(srv.sessions)-1]
-			break
+		if ses != nil {
+			f(ses)
 		}
 	}
 }
 
 func (srv *Server) handler(conn net.Conn) {
-	ses := srv.newSes()
-	defer func() { srv.Free(ses) }()
+	ses := srv.NewSes()
 	ses.ASN.SetConn(conn)
+	defer func() {
+		r := recover()
+		ses.ExecMutex.Lock()
+		ses.ExecMutex.Unlock()
+		for i := 0; !ses.ASN.Go.Tx.X; i += 1 {
+			if i == 0 {
+				close(ses.ASN.Go.Tx.C)
+			}
+			time.Sleep(100 * time.Millisecond)
+			if i == 3 {
+				panic("can't close connection")
+			}
+		}
+		ses.Free()
+		srv.mutex.Lock()
+		for i := range srv.sessions {
+			if srv.sessions[i] == ses {
+				srv.sessions[i] = nil
+				break
+			}
+		}
+		srv.mutex.Unlock()
+		if r != nil {
+			err := r.(error)
+			Diag.Output(4, ses.ASN.Name.Session+" "+err.Error())
+		}
+	}()
 	conn.Read(ses.Keys.Client.Ephemeral[:])
-	ses.ASN.Println("connected",
-		ses.Keys.Client.Ephemeral.String()[:8]+"...")
 	ses.ASN.SetBox(NewBox(2, srv.cmd.Cfg.Keys.Nonce,
 		&ses.Keys.Client.Ephemeral,
 		srv.cmd.Cfg.Keys.Server.Pub.Encr,
 		srv.cmd.Cfg.Keys.Server.Sec.Encr))
 	for {
-		pdu := <-ses.ASN.RxQ
-		if pdu == nil {
-			break
+		pdu, opened := <-ses.ASN.Go.Rx.C
+		if !opened {
+			runtime.Goexit()
 		}
 		err := pdu.Open()
 		if err != nil {
 			pdu.Free()
-			break
+			panic(err)
 		}
-		var (
-			v  Version
-			id Id
-		)
+		var v Version
 		v.ReadFrom(pdu)
 		if v > ses.ASN.Version() {
 			ses.ASN.SetVersion(v)
 		}
+		var id Id
 		id.ReadFrom(pdu)
 		id.Internal(v)
 		ses.ASN.Time.Out = time.Now()
@@ -203,43 +209,47 @@ func (srv *Server) handler(conn net.Conn) {
 		case ExecReqId:
 			err = ses.RxExec(pdu)
 		case LoginReqId:
-			err = ses.RxLogin(pdu)
-		case PauseReqId:
-			err = ses.RxPause(pdu)
-		case ResumeReqId:
-			err = ses.RxResume(pdu)
-		case QuitReqId:
-			err = ses.RxQuit(pdu)
+			if err = ses.RxLogin(pdu); err != nil {
+				panic(err)
+			}
 		case BlobId:
 			err = ses.RxBlob(pdu)
 		default:
 			if id >= Nids {
-				err = ErrIncompatible
+				panic(ErrIncompatible)
 			} else {
-				err = ErrUnsupported
+				panic(ErrUnsupported)
 			}
 		}
 		pdu.Free()
 		pdu = nil
 		if err != nil {
-			ses.ASN.Println("Error:", err)
-			break
+			panic(err)
 		}
 	}
 }
 
 func (srv *Server) Hangup() {
-	for len(srv.sessions) > 0 {
+	srv.mutex.Lock()
+	for _, ses := range srv.sessions {
+		if ses != nil && !ses.ASN.Go.Tx.X {
+			close(ses.ASN.Go.Tx.C)
+		}
+	}
+	srv.mutex.Unlock()
+	for {
+		active := 0
 		srv.mutex.Lock()
-		ses := srv.sessions[0]
-		srv.mutex.Unlock()
-		ses.ASN.SetStateClosed()
-		for {
-			time.Sleep(100 * time.Millisecond)
-			if len(srv.sessions) == 0 || srv.sessions[0] != ses {
-				break
+		for _, ses := range srv.sessions {
+			if ses != nil {
+				active += 1
 			}
 		}
+		srv.mutex.Unlock()
+		if active == 0 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 	srv.sessions = nil
 }
@@ -322,16 +332,22 @@ func (srv *Server) Listen() error {
 	return nil
 }
 
-func (srv *Server) newSes() (ses *Ses) {
+func (srv *Server) NewSes() (ses *Ses) {
 	srv.mutex.Lock()
+	defer srv.mutex.Unlock()
 	ses = NewSes()
-	srv.sessions = append(srv.sessions, ses)
 	ses.srv = srv
 	ses.ASN.Repos = srv.repos
 	ses.ASN.Name.Local = srv.cmd.Cfg.Name
 	ses.ASN.Name.Remote = "unnamed"
-	ses.ASN.Name.Session = ses.ASN.Name.Local + ":" + ses.ASN.Name.Remote
-	srv.mutex.Unlock()
+	ses.ASN.NameSession()
+	for i := range srv.sessions {
+		if srv.sessions[i] == nil {
+			srv.sessions[i] = ses
+			return
+		}
+	}
+	srv.sessions = append(srv.sessions, ses)
 	return
 }
 

@@ -123,16 +123,8 @@ func (ses *Ses) IsService(key *PubEncr) bool {
 	return *key == *ses.srv.cmd.Cfg.Keys.Server.Pub.Encr
 }
 
-func (ses *Ses) Rekey(req Requester) {
-	var nonce Nonce
-	rand.Reader.Read(nonce[:])
-	pub, sec, _ := NewRandomEncrKeys()
-	ses.Keys.Server.Ephemeral = *pub
-	ses.ASN.Ack(req, pub[:], nonce[:])
-	ses.ASN.SetStateEstablished()
-	ses.ASN.SetBox(NewBox(2, &nonce, &ses.Keys.Client.Ephemeral,
-		pub, sec))
-	ses.ASN.Println("rekeyed with", pub.String()[:8]+"...")
+func (ses *Ses) Rekey(_ Requester) {
+	// FIXME
 }
 
 // removals: if pdus[1] is a filename containing "asn/removals",
@@ -171,6 +163,7 @@ func (ses *Ses) RxBlob(pdu *PDU) (err error) {
 		blob.Free()
 		blob = nil
 	}()
+	ses.ASN.Trace("rx", BlobId, req, blob.Name)
 	sum, fn, err := ses.srv.repos.File(blob, pdu)
 	if err != nil {
 		return
@@ -198,6 +191,9 @@ func (ses *Ses) RxLogin(pdu *PDU) (err error) {
 	if err != nil {
 		return
 	}
+	ses.ASN.Trace("rx", LoginReqId, req,
+		ses.Keys.Client.Login.String()[:8]+"...",
+		sig.String()[:8]+"...")
 	err = ErrFailure
 	switch {
 	case ses.Keys.Client.Login.Equal(ses.srv.cmd.Cfg.Keys.Admin.Pub.Encr):
@@ -220,42 +216,19 @@ func (ses *Ses) RxLogin(pdu *PDU) (err error) {
 			err = nil
 		}
 	}
-	ses.ASN.Name.Session = ses.ASN.Name.Local + ":" + ses.ASN.Name.Remote
-	if err != nil {
-		ses.ASN.Println("login", err)
+	ses.ASN.NameSession()
+	if err == nil {
+		var nonce Nonce
+		rand.Reader.Read(nonce[:])
+		pub, sec, _ := NewRandomEncrKeys()
+		ses.Keys.Server.Ephemeral = *pub
+		ses.ASN.Diag("login rekeyed with", pub.String()[:8]+"...")
+		ses.ASN.Ack(req, pub[:], nonce[:])
+		ses.ASN.SetStateEstablished()
+		ses.ASN.SetBox(NewBox(2, &nonce, &ses.Keys.Client.Ephemeral,
+			pub, sec))
 	} else {
-		ses.Rekey(req)
-		ses.ASN.Println("login")
+		ses.ASN.Diag("login", err)
 	}
 	return
-}
-
-func (ses *Ses) RxPause(pdu *PDU) error {
-	var req Requester
-	req.ReadFrom(pdu)
-	ses.ASN.Println("suspending")
-	ses.ASN.Ack(req)
-	ses.ASN.SetStateSuspended()
-	return nil
-}
-
-func (ses *Ses) RxQuit(pdu *PDU) error {
-	var req Requester
-	req.ReadFrom(pdu)
-	ses.ASN.Println("quitting")
-	ses.ASN.Ack(req)
-	ses.ASN.SetStateQuitting()
-	return nil
-}
-
-func (ses *Ses) RxResume(pdu *PDU) error {
-	var req Requester
-	req.ReadFrom(pdu)
-	ses.ASN.Println("resuming")
-	ses.Rekey(req)
-	return nil
-}
-
-func (ses *Ses) Send(fn string, keys ...*PubEncr) {
-	// FIXME
 }

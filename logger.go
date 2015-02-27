@@ -25,7 +25,7 @@ func (l *Logger) ASN(asn *ASN, v ...interface{}) {
 }
 
 func (l *Logger) ASNf(asn *ASN, format string, v ...interface{}) {
-	Diag.Output(3, asn.Name.Session+" "+fmt.Sprintf(format, v...))
+	l.Output(3, asn.Name.Session+" "+fmt.Sprintf(format, v...))
 }
 
 func (l *Logger) Close() (err error) {
@@ -84,7 +84,7 @@ func (l *Logger) Priority() syslog.Priority {
 }
 
 func (l *Logger) Write(b []byte) (int, error) {
-	l.Output(2, string(b))
+	l.Output(3, string(b))
 	return len(b), nil
 }
 

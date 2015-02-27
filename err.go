@@ -43,7 +43,6 @@ const (
 var (
 	// These aren't Nack'd Err codes
 	ErrDisestablished = errors.New("Disestablished session")
-	ErrSuspended      = errors.New("Suspended session")
 	ErrParse          = errors.New("Internal parse error")
 	ErrQuery          = errors.New("invalid or missing query string")
 

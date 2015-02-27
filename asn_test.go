@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"syscall"
 	"testing"
+	"time"
 )
 
 type Buffer struct{ bytes.Buffer }
@@ -137,15 +138,7 @@ echo hello world
 	}
 	err = admin.Test("trace", `
 trace flush
-`, "test-sf:unnamed connected.*", "-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = admin.Test("suspend", `
-pause
-resume
-echo Awaken!
-`, "Awaken!", "-")
+`, "test-sf.unnamed. tx AckReq.*", "-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,8 +166,14 @@ auth-blob
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = admin.Test("message blob", `
+	// admin.cmd.Flag.Server = "sf.ws"
+	err = admin.Test("message", `
 blob asn/messages hello world
+`, "[0-9a-f]*", "-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = admin.Test("another message", `
 blob asn/messages/ its me
 `, "[0-9a-f]*", "-")
 	if err != nil {
@@ -189,16 +188,21 @@ func (b *Buffer) Close() error { return nil }
 func (x *AsnTest) Test(desc, in, pat string, args ...string) (err error) {
 	if testing.Verbose() {
 		fmt.Print(desc, "...")
+		Diag.Println(desc, "...")
 	}
 	x.out.Reset()
 	x.in.Reset()
 	io.WriteString(&x.in, in)
+	sleep := func() {}
 	if x.mode.Admin() {
 		go x.cmd.Admin(args...)
+		sleep = func() { time.Sleep(100 * time.Millisecond) }
 	} else {
 		go x.cmd.Server(args...)
 	}
-	if err = x.cmd.Wait(); err == nil {
+	err = x.cmd.Wait()
+	sleep()
+	if err == nil {
 		var t bool
 		got := x.out.String()
 		t, err = regexp.MatchReader(pat, &x.out)

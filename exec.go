@@ -143,8 +143,8 @@ func (ses *Ses) RxExec(pdu *PDU) error {
 	} else {
 		args = strings.Split(string(cmd[:n]), "\x00")
 	}
-	ses.ASN.Diagf("exec pdu %p: %v\n", pdu, args)
 	pdu.Clone()
+	ses.ASN.Diag("exec", args)
 	ses.ExecMutex.Lock()
 	go ses.GoExec(req, pdu, args...)
 	return nil
@@ -158,6 +158,7 @@ func (ses *Ses) GoExec(req Requester, pdu *PDU, args ...string) {
 
 func (ses *Ses) Exec(req Requester, r io.Reader,
 	args ...string) interface{} {
+	ses.ASN.Trace("rx", ExecReqId, req, args)
 	switch args[0] {
 	case "exec-help", "help":
 		return UsageCommands

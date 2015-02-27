@@ -60,6 +60,7 @@ func (asn *ASN) AckerRx(pdu *PDU) (err error) {
 	if _, err = (NBOReader{pdu}).ReadNBO(&asn.Time.In); err != nil {
 		return
 	}
+	asn.Trace("rx", AckReqId, req)
 	asn.Acker.mutex.Lock()
 	f := asn.Acker.fmap[req]
 	asn.Acker.mutex.Unlock()
@@ -99,7 +100,7 @@ func (asn *ASN) Ack(req Requester, argv ...interface{}) {
 	(NBOWriter{ack}).WriteNBO(asn.Time.Out)
 	if err != nil {
 		asn.Trace("tx", AckReqId, req, err)
-		asn.Diag("nack", err)
+		Diag.Output(2, asn.Name.Session+" nack"+err.Error())
 		ErrFromError(err).Version(v).WriteTo(ack)
 		if len(argv) > 0 {
 			AckOut(ack, argv...)
@@ -108,9 +109,9 @@ func (asn *ASN) Ack(req Requester, argv ...interface{}) {
 		}
 	} else {
 		asn.Trace("tx", AckReqId, req, Success)
+		Diag.Output(2, asn.Name.Session+" ack")
 		Success.Version(v).WriteTo(ack)
 		AckOut(ack, argv...)
-		asn.Diag("ack")
 	}
 	asn.Tx(ack)
 }

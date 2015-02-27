@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 )
 
@@ -23,8 +24,6 @@ const (
 	opened uint8 = iota
 	provisional
 	established
-	suspended
-	quitting
 	closed
 )
 
@@ -60,12 +59,20 @@ type ASN struct {
 	}
 	// Version adapts to peer
 	version Version
-	// State may be { opened, established, suspended, quitting }
+	// State may be { opened, provisional, established, closed }
 	state uint8
 	// Keys to Open/Seal
-	box  *Box
-	RxQ  chan *PDU
-	txq  chan pdubox
+	box *Box
+	Go  struct {
+		Rx struct {
+			C chan *PDU
+			X bool // true on exit of GoRx
+		}
+		Tx struct {
+			C chan pdubox
+			X bool // true on exit of GoTx
+		}
+	}
 	conn net.Conn
 	// buffers
 	rxBlack, rxRed []byte
@@ -98,15 +105,17 @@ func NewASN() (asn *ASN) {
 	default:
 		asn = &ASN{
 			version: Latest,
-			RxQ:     make(chan *PDU, 4),
-			txq:     make(chan pdubox, 4),
 			rxBlack: make([]byte, 0, MaxSegSz),
 			rxRed:   make([]byte, 0, MaxSegSz),
 			txBlack: make([]byte, 0, MaxSegSz),
 			txRed:   make([]byte, 0, MaxSegSz),
 		}
-		asn.Acker.Init()
 	}
+	asn.Go.Rx.C = make(chan *PDU, 4)
+	asn.Go.Tx.C = make(chan pdubox, 4)
+	asn.Go.Rx.X = false
+	asn.Go.Tx.X = false
+	asn.Acker.Init()
 	return
 }
 
@@ -116,13 +125,10 @@ func (asn *ASN) del() {
 		return
 	}
 	asn.box = nil
-	close(asn.RxQ)
-	close(asn.txq)
 	asn.rxBlack = nil
 	asn.rxRed = nil
 	asn.txBlack = nil
 	asn.txRed = nil
-	asn.Acker.Free()
 }
 
 // Free the ASN back to pool or release it to GC if full.
@@ -131,31 +137,16 @@ func (asn *ASN) Free() {
 		return
 	}
 	if asn.conn != nil {
-		asn.SetStateClosed()
-		asn.conn.Close()
-		asn.conn = nil
-	}
-flush: // flush queues
-	for {
-		select {
-		case pdu := <-asn.RxQ:
-			if pdu != nil {
-				pdu.Free()
-				pdu = nil
-			}
-		case pb := <-asn.txq:
-			if pb.pdu != nil {
-				pb.pdu.Free()
-				pb.pdu = nil
-				pb.box = nil
-			}
-		default:
-			break flush
+		if !asn.IsClosed() {
+			asn.SetStateClosed()
+			asn.conn.Close()
 		}
+		asn.conn = nil
 	}
 	asn.Name.Local = ""
 	asn.Name.Remote = ""
 	asn.Name.Session = ""
+	asn.Acker.Free()
 	select {
 	case asnPool <- asn:
 	default:
@@ -163,29 +154,38 @@ flush: // flush queues
 	}
 	asn = nil
 }
+
 func (asn *ASN) Conn() net.Conn      { return asn.conn }
 func (asn *ASN) IsOpened() bool      { return asn.state == opened }
 func (asn *ASN) IsProvisional() bool { return asn.state == provisional }
 func (asn *ASN) IsEstablished() bool { return asn.state == established }
-func (asn *ASN) IsSuspended() bool   { return asn.state == suspended }
-func (asn *ASN) IsQuitting() bool    { return asn.state == quitting }
 func (asn *ASN) IsClosed() bool      { return asn.state == closed }
 
-// pdurx receives, decrypts and reassembles segmented PDUs on the asn.RxQ until
-// error, or EOF; then sends nil through asn.RxQ when done.
-func (asn *ASN) pdurx() {
+func (asn *ASN) NameSession() {
+	asn.Name.Session = asn.Name.Local + "(" + asn.Name.Remote + ")"
+}
+
+// GoRx receives, decrypts and reassembles segmented PDUs on the asn.Rx.Q
+// until error, or EOF; then closes asn.Rx.Q when done.
+func (asn *ASN) GoRx() {
 	pdu := NewPDUBuf()
 	defer func() {
-		var err error
-		if perr := recover(); perr != nil {
-			err = perr.(error)
+		if r := recover(); r != nil {
+			err := r.(error)
+			if err != io.EOF || !asn.IsClosed() {
+				Diag.Output(4, asn.Name.Session+" "+
+					err.Error())
+			}
 		}
 		pdu.Free()
-		asn.RxQ <- nil
-		asn.Diag("pdurx quit", err)
+		close(asn.Go.Rx.C)
+		asn.Go.Rx.X = true
 	}()
 	for {
-		var l uint16
+		l := uint16(0)
+		if pdu.File != nil && pdu.PB != nil {
+			panic(os.ErrInvalid)
+		}
 		_, err := (NBOReader{asn}).ReadNBO(&l)
 		if err != nil {
 			panic(err)
@@ -194,8 +194,8 @@ func (asn *ASN) pdurx() {
 		if n > MaxSegSz {
 			panic(ErrTooLarge)
 		}
-		if pdu.File != nil && pdu.PB != nil {
-			asn.Diag("oops pdu %p\n", pdu)
+		if n == 0 {
+			panic(os.ErrInvalid)
 		}
 		asn.rxRed = asn.rxRed[:0]
 		_, err = asn.Read(asn.rxRed[:n])
@@ -209,12 +209,11 @@ func (asn *ASN) pdurx() {
 		}
 		_, err = pdu.Write(b)
 		if err != nil {
-			asn.Diag("pdu.Write:", err)
 			panic(err)
 		}
 		if (l & MoreFlag) == 0 {
-			asn.Diagf("RXQ %p; len %d\n", pdu, pdu.Len())
-			asn.RxQ <- pdu
+			// asn.Diagf("RXQ %p; len %d\n", pdu, pdu.Len())
+			asn.Go.Rx.C <- pdu
 			pdu = NewPDUBuf()
 		} else if pdu.PB != nil {
 			pdu.File, err = asn.Repos.Tmp.NewFile()
@@ -225,93 +224,76 @@ func (asn *ASN) pdurx() {
 			pdu.File.Write(pdu.PB.Bytes())
 			pdu.PB.Free()
 			pdu.PB = nil
-			asn.Diagf("extend %p into %s\n", pdu, pdu.FN)
+			// asn.Diagf("extend %p into %s\n", pdu, pdu.FN)
 		}
 	}
 }
 
-// pdutx pulls PDU from asn.txq, segments, and encrypts before sending
-// through asn.conn. This stops on error or nil.
-func (asn *ASN) pdutx() {
+// GoTx pulls PDU from a channel, segments, and encrypts before sending through
+// asn.conn. This stops and closes the connection on error or closed channel.
+func (asn *ASN) GoTx() {
 	const maxBlack = MaxSegSz - BoxOverhead
-	var (
-		err error
-		pb  pdubox
-	)
 	defer func() {
-		if perr := recover(); perr != nil {
-			err = perr.(error)
+		if r := recover(); r != nil {
+			err := r.(error)
+			Diag.Output(4, asn.Name.Session+" "+err.Error())
 		}
-		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-			asn.Diag("pdutx", err)
-		} else {
-			asn.Diag("pdutx", "quit")
+		if asn.conn != nil {
+			asn.SetStateClosed()
+			asn.conn.Close()
 		}
+		asn.Go.Tx.X = true
 	}()
 	for {
-		if pb = <-asn.txq; pb.pdu == nil {
-			return
+		pb, open := <-asn.Go.Tx.C
+		if !open {
+			asn.Diag("quit pdutx")
+			runtime.Goexit()
 		}
-		if err = pb.pdu.Open(); err != nil {
-			return
+		if err := pb.pdu.Open(); err != nil {
+			panic(err)
 		}
-	segLoop:
-		for {
-			n := pb.pdu.Len()
-			if n == 0 {
-				break segLoop
-			}
+		for n := pb.pdu.Len(); n > 0; n = pb.pdu.Len() {
 			if n > maxBlack {
 				n = maxBlack
 			}
 			asn.txBlack = asn.txBlack[:n]
-			if _, err = pb.pdu.Read(asn.txBlack); err != nil {
-				break segLoop
+			if _, err := pb.pdu.Read(asn.txBlack); err != nil {
+				panic(err)
 			}
 			asn.txRed = asn.txRed[:0]
-			var b []byte
-			b, err = pb.box.Seal(asn.txRed, asn.txBlack)
+			b, err := pb.box.Seal(asn.txRed, asn.txBlack)
 			if err != nil {
-				break segLoop
+				panic(err)
 			}
 			l := uint16(len(b))
 			if pb.pdu.Len() > 0 {
 				l |= MoreFlag
 			}
 			if _, err = (NBOWriter{asn}).WriteNBO(l); err != nil {
-				break segLoop
+				panic(err)
 			}
 			if _, err = asn.Write(b); err != nil {
-				break segLoop
+				panic(err)
 			}
-			asn.Diagf("tx pdu %p; len %d\n", pb.pdu, l & ^MoreFlag)
+			// asn.Diagf("pdutx %p; len %d\n", pb.pdu, l & ^MoreFlag)
 		}
 		pb.pdu.Free()
 		pb.pdu = nil
 		pb.box = nil
-		if err != nil {
-			return
-		}
-		if asn.IsQuitting() {
-			v := Version(asn.txBlack[0])
-			id := Id(asn.txBlack[1])
-			if id.Internal(v); id == AckReqId {
-				return
-			}
-		}
 	}
 }
 
 // Read full buffer from asn.conn unless preempted with state == closed.
 func (asn *ASN) Read(b []byte) (n int, err error) {
 	for i := 0; n < len(b); n += i {
-		if asn.IsClosed() {
-			err = io.EOF
-			break
-		}
 		asn.conn.SetReadDeadline(time.Now().Add(ConnTO))
 		i, err = asn.conn.Read(b[n:])
 		if err != nil {
+			if asn.IsClosed() {
+				err = io.EOF
+				break
+			}
 			eto, ok := err.(net.Error)
 			if !ok || !eto.Timeout() {
 				break
@@ -328,15 +310,13 @@ func (asn *ASN) SetBox(box *Box) { asn.box = box }
 func (asn *ASN) SetConn(conn net.Conn) {
 	asn.conn = conn
 	asn.SetStateOpened()
-	go asn.pdurx()
-	go asn.pdutx()
+	go asn.GoRx()
+	go asn.GoTx()
 }
 
 func (asn *ASN) SetStateOpened()      { asn.state = opened }
 func (asn *ASN) SetStateProvisional() { asn.state = provisional }
 func (asn *ASN) SetStateEstablished() { asn.state = established }
-func (asn *ASN) SetStateSuspended()   { asn.state = suspended }
-func (asn *ASN) SetStateQuitting()    { asn.state = quitting }
 func (asn *ASN) SetStateClosed()      { asn.state = closed }
 
 func (asn *ASN) SetVersion(v Version) {
@@ -355,16 +335,7 @@ func (asn *ASN) Tx(pdu *PDU) {
 		Diag.Output(2, "tried to Tx on closed ASN")
 		return
 	}
-	if pdu.FN != "" {
-		if pdu.File != nil {
-			asn.Diag("tx", pdu.FN, "size", pdu.Size())
-		} else {
-			asn.Diag("tx", pdu.FN)
-		}
-	} else {
-		asn.Diagf("tx %x\n", pdu.PB.Bytes())
-	}
-	asn.txq <- pdubox{pdu: pdu, box: asn.box}
+	asn.Go.Tx.C <- pdubox{pdu: pdu, box: asn.box}
 }
 
 // Version steps down to the peer.
