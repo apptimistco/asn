@@ -125,21 +125,22 @@ func (ses *Ses) RxExec(pdu *PDU) error {
 		cmd  [256]byte
 		args []string
 	)
-	const demarcation = "\x00\x00"
 	req.ReadFrom(pdu)
 	n, err := pdu.Read(cmd[:])
 	if err != nil {
 		return err
 	}
-	if n == len(cmd) {
+	const demarcation = "\x00\x00"
+	dem := bytes.Index(cmd[:n], []byte(demarcation));
+	if dem < 0 && n == len(cmd) {
 		err := errors.New("command too long")
 		Diag.Println(err)
 		ses.ASN.Ack(req, err)
 		return nil
 	}
-	if i := bytes.Index(cmd[:n], []byte(demarcation)); i > 0 {
-		args = strings.Split(string(cmd[:i+1]), "\x00")
-		pdu.Rseek(int64((i-n)+len(demarcation)), os.SEEK_CUR)
+	if dem > 0 {
+		args = strings.Split(string(cmd[:dem+1]), "\x00")
+		pdu.Rseek(int64((dem-n)+len(demarcation)), os.SEEK_CUR)
 	} else {
 		args = strings.Split(string(cmd[:n]), "\x00")
 	}
