@@ -204,9 +204,9 @@ func (blob *Blob) RFC822Z() string { return blob.Time.Format(time.RFC822Z) }
 func (blob *Blob) String() string {
 	b := &bytes.Buffer{}
 	fmt.Fprintln(b, "name:", blob.Name)
-	fmt.Fprintln(b, "owner:", blob.Owner)
-	fmt.Fprintln(b, "author:", blob.Author)
-	fmt.Fprint(b, "time: ", blob.RFC822Z())
+	fmt.Fprintln(b, "owner:", &blob.Owner)
+	fmt.Fprintln(b, "author:", &blob.Author)
+	fmt.Fprint(b, "time: ", blob.Time)
 	return b.String()
 }
 
