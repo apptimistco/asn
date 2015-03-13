@@ -465,6 +465,8 @@ func (repos *Repos) Store(x Sender, v Version, blob *Blob,
 		if r := recover(); r != nil && err == nil {
 			err = r.(error)
 			repos.Diag(debug.Depth(6), err)
+		} else if err != nil {
+			repos.Diag(debug.Depth(2), err)
 		}
 	}()
 	var m io.Writer
@@ -514,15 +516,15 @@ func (repos *Repos) Store(x Sender, v Version, blob *Blob,
 	case blob.Name == AsnMark:
 		err = ReadFromFile(owner.cache.Mark(), f)
 		if err != nil {
-			return
-		}
-		if owner.IsActual() {
-			// don't link or mirror "actual" user marks
-			syscall.Unlink(sumFN)
-			return
+			if err != io.EOF {
+				return
+			}
+			err = nil
 		}
 		x.Send(Mirrors, f)
 		LN(sumFN, repos.Join(owner.Join(blob.Name)))
+		// don't retain sum link as there is no need to recover a mark
+		syscall.Unlink(sumFN)
 	case blob.Name == AsnAuth:
 		err = ReadFromFile(owner.cache.PubAuth(blob.Name), f)
 		if err != nil {

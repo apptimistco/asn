@@ -56,19 +56,6 @@ func (m *Mark) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-func (m *Mark) WriteTo(w io.Writer) (n int64, err error) {
-	var a accumulator.Int64
-	defer func() {
-		if r := recover(); r != nil {
-			err, _ = r.(error)
-		}
-		n = int64(a)
-	}()
-	a.Accumulate64(m.Key.WriteTo(w))
-	a.Accumulate64(m.Loc.WriteTo(w))
-	return
-}
-
 func (m *Mark) Reset() {
 	*m = Mark{}
 }
@@ -98,6 +85,19 @@ func (m *Mark) String() string {
 	fmt.Fprintln(b, "markey:", m.Key.String())
 	fmt.Fprint(b, m.Loc.String())
 	return b.String()
+}
+
+func (m *Mark) WriteTo(w io.Writer) (n int64, err error) {
+	var a accumulator.Int64
+	defer func() {
+		if r := recover(); r != nil {
+			err, _ = r.(error)
+		}
+		n = int64(a)
+	}()
+	a.Accumulate64(m.Key.WriteTo(w))
+	a.Accumulate64(m.Loc.WriteTo(w))
+	return
 }
 
 type Markey [MarkeySz]byte

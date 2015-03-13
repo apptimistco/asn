@@ -457,7 +457,6 @@ func (ses *Ses) ExecFetch(r io.Reader, args ...string) interface{} {
 			ses.asn.Tx(pdu)
 			return nil
 		}
-		ses.asn.Fixme("sent", fn)
 		ses.asn.Tx(NewPDUFN(fn))
 		return nil
 	}, r, args...)
@@ -557,6 +556,9 @@ func (ses *Ses) ExecGC(req Req, args ...string) interface{} {
 	}
 	err = ses.asn.repos.Filter(after, func(fn string) error {
 		var st syscall.Stat_t
+		if strings.HasSuffix(fn, filepath.FromSlash(AsnMark)) {
+			return nil
+		}
 		if err := syscall.Stat(fn, &st); err != nil {
 			return err
 		}
@@ -610,7 +612,7 @@ func (ses *Ses) ExecLS(req Req,
 }
 
 // ExecMark without args (or just -u USER) sets the login or given
-// user sets mark to [ 0.0, 0.0 ] (in the Gulf of Guinea)
+// user sets mark to { 0.0, 0.0 } (in the Gulf of Guinea)
 func (ses *Ses) ExecMark(args ...string) interface{} {
 	var err error
 	defer func() {
@@ -649,18 +651,15 @@ func (ses *Ses) ExecMark(args ...string) interface{} {
 		}
 	}
 	user.cache[AsnMark].Set(ses.asn.time.out)
-	if !user.IsActual() {
-		var sum *Sum
-		b := &bytes.Buffer{}
-		b.Write(user.key[:MarkeySz])
-		b.Write(user.cache.Mark().Bytes())
-		sum, err = ses.Store(user, ses.user, AsnMark, b)
-		if err != nil {
-			return err
-		}
-		return sum
+	var sum *Sum
+	b := &bytes.Buffer{}
+	b.Write(user.key[:MarkeySz])
+	b.Write(user.cache.Mark().Bytes())
+	sum, err = ses.Store(user, ses.user, AsnMark, b)
+	if err != nil {
+		return err
 	}
-	return nil
+	return sum
 }
 
 func (ses *Ses) ExecNewUser(args ...string) interface{} {
@@ -730,18 +729,6 @@ func (ses *Ses) ExecObjDump(r io.Reader, args ...string) interface{} {
 				ses.asn.Diag(debug.Depth(2), err)
 			}
 		}()
-		if strings.HasSuffix(fn, filepath.FromSlash(AsnMark)) {
-			user, _ := ses.asn.repos.ParsePath(fn)
-			if user == nil {
-				err = os.ErrNotExist
-				return
-			}
-			mark := user.cache.Mark()
-			fmt.Fprintln(out, "cached:", AsnMark)
-			fmt.Fprintln(out, "owner:", user)
-			fmt.Fprintln(out, mark)
-			return
-		}
 		f, err := os.Open(fn)
 		if err != nil {
 			return
@@ -755,10 +742,8 @@ func (ses *Ses) ExecObjDump(r io.Reader, args ...string) interface{} {
 		}
 		pos, _ := f.Seek(0, os.SEEK_CUR)
 		fi, _ := f.Stat()
-		fmt.Fprintln(out, "sum:", sum)
+		fmt.Fprintln(out, "sum:", sum.String()[:8]+"...")
 		fmt.Fprintln(out, blob)
-		fmt.Fprintln(out, "size:", fi.Size())
-		fmt.Fprintln(out, "len:", fi.Size()-pos)
 		switch blob.Name {
 		case AsnAuth:
 			var auth PubAuth
@@ -768,10 +753,17 @@ func (ses *Ses) ExecObjDump(r io.Reader, args ...string) interface{} {
 			var author PubEncr
 			f.Read(author[:])
 			fmt.Fprintln(out, "author:", author)
+		case AsnMark:
+			var mark Mark
+			mark.ReadFrom(f)
+			fmt.Fprintln(out, &mark)
 		case AsnUser:
 			fmt.Fprintf(out, "user: ")
 			io.Copy(out, f)
 			fmt.Fprintln(out)
+		default:
+			fmt.Fprintln(out, "size:", fi.Size())
+			fmt.Fprintln(out, "len:", fi.Size()-pos)
 		}
 		return
 	}, r, args...); err != nil {
@@ -901,26 +893,7 @@ func (ses *Ses) Blobber(filter func(fn string) error, r io.Reader,
 			}
 			matches = nil
 		}
-		mfn := repos.Join(u.Join(AsnMark))
-		mt := u.cache[AsnMark].Time
-		if glob == AsnMark {
-			if mt.IsZero() {
-				return os.ErrNotExist
-			}
-			if mt.After(this) {
-				return filter(mfn)
-			}
-			return nil
-		}
-		if glob == "*" {
-			if !mt.IsZero() && mt.After(this) {
-				if err = filter(mfn); err != nil {
-					return err
-				}
-			}
-		}
-		uglob := repos.Join(u.Join(glob))
-		matches, err := filepath.Glob(uglob)
+		matches, err := filepath.Glob(repos.Join(u.Join(glob)))
 		defer func() { matches = nil }()
 		if err != nil {
 			return err
