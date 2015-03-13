@@ -10,8 +10,6 @@ import (
 	"path/filepath"
 )
 
-const AsnActual = "actual"
-
 func userDN(keystr string) string {
 	return filepath.Join(keystr[:ReposTopSz], keystr[ReposTopSz:])
 }
@@ -34,7 +32,6 @@ func newUser(key *PubEncr, keystr string) (u *User) {
 			AsnMark:        &CacheEntry{Time0, &Mark{}},
 			AsnModerators:  &CacheEntry{Time0, &PubEncrList{}},
 			AsnSubscribers: &CacheEntry{Time0, &PubEncrList{}},
-			AsnUser:        &CacheEntry{Time0, &Buffer{}},
 		},
 		dn:     userDN(keystr),
 		key:    *key,
@@ -65,11 +62,6 @@ func (u *User) DN() string {
 		u.dn = userDN(u.keystr)
 	}
 	return u.dn
-}
-
-func (u *User) IsActual() bool {
-	s := u.cache.User().String()
-	return s == "" || s == AsnActual
 }
 
 func (u *User) MayApproveFor(o *User) bool {

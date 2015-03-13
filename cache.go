@@ -105,10 +105,6 @@ func (c Cache) Subscribers() *PubEncrList {
 	return c.PubEncrList(AsnSubscribers)
 }
 
-func (c Cache) User() *Buffer {
-	return c[AsnUser].Cacher.(*Buffer)
-}
-
 type CacheEntry struct {
 	time.Time
 	Cacher

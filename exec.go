@@ -689,15 +689,15 @@ func (ses *Ses) ExecNewUser(args ...string) interface{} {
 	if author == nil {
 		author = owner
 	}
-	_, err = ses.Store(owner, ses.user, AsnAuth, k.Pub.Auth)
+	_, err = ses.Store(owner, author, AsnAuth, k.Pub.Auth)
 	if err != nil {
 		return err
 	}
-	_, err = ses.Store(owner, ses.user, AsnAuthor, &author.key)
+	_, err = ses.Store(owner, author, AsnAuthor, &author.key)
 	if err != nil {
 		return err
 	}
-	_, err = ses.Store(owner, ses.user, AsnUser,
+	_, err = ses.Store(owner, author, AsnUser,
 		bytes.NewBufferString(args[0]))
 	if err != nil {
 		return err
@@ -757,10 +757,6 @@ func (ses *Ses) ExecObjDump(r io.Reader, args ...string) interface{} {
 			var mark Mark
 			mark.ReadFrom(f)
 			fmt.Fprintln(out, &mark)
-		case AsnUser:
-			fmt.Fprintf(out, "user: ")
-			io.Copy(out, f)
-			fmt.Fprintln(out)
 		default:
 			fmt.Fprintln(out, "size:", fi.Size())
 			fmt.Fprintln(out, "len:", fi.Size()-pos)
