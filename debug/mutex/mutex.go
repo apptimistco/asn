@@ -56,17 +56,3 @@ type Mutex struct {
 	sync.Mutex
 	debug.Debug
 }
-
-/*
-FIXME
-
-// Reset the Debug prefix string.
-func (m *Mutex) Reset() {
-	m.Debug.Reset()
-}
-
-// Set the Debug prefix string.
-func (m *Mutex) Set(v interface{}) error {
-	return m.Debug.Set(v)
-}
-*/
