@@ -114,6 +114,7 @@ func (f *File) Dup() (dup *File, err error) {
 		return
 	}
 	dup = &File{os.NewFile(uintptr(fd), f.Name())}
+	_, err = dup.Seek(0, os.SEEK_SET)
 	f.Diag(debug.Depth(2), "duped")
 	return
 }
