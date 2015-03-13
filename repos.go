@@ -250,11 +250,10 @@ func (repos *Repos) lsm(x Sender, sum *Sum, fn string, f *file.File,
 	owner := repos.users.User(&blob.Owner)
 	author := repos.users.User(&blob.Author)
 	x.Send(&owner.key, f)
-	LN(fn, repos.Join(owner.Join(AsnMessages, blob.FN(sum.String()))))
+	LN(fn, repos.Join(owner.Join(AsnMessages, blob.FN(sum))))
 	if author != owner {
 		x.Send(&author.key, f)
-		LN(fn, repos.Join(author.Join(AsnMessages,
-			blob.FN(sum.String()))))
+		LN(fn, repos.Join(author.Join(AsnMessages, blob.FN(sum))))
 	}
 	if subscribers := owner.cache.Subscribers(); len(*subscribers) > 0 {
 		for _, k := range *subscribers {
@@ -262,7 +261,7 @@ func (repos *Repos) lsm(x Sender, sum *Sum, fn string, f *file.File,
 			if sub != nil && sub != owner && sub != author {
 				x.Send(&k, f)
 				LN(fn, repos.Join(sub.Join(AsnMessages,
-					blob.FN(sum.String()))))
+					blob.FN(sum))))
 			}
 		}
 	}
@@ -314,7 +313,7 @@ func (repos *Repos) ProcSums(x Sender, f *file.File, blob *Blob) error {
 			}
 			return err
 		}
-		target.fn = repos.Expand(sum.String())
+		target.fn = repos.Join(sum.PN())
 		if err = syscall.Stat(target.fn, &target.stat); err != nil {
 			err = nil
 			continue
@@ -334,8 +333,7 @@ func (repos *Repos) ProcSums(x Sender, f *file.File, blob *Blob) error {
 		}
 		if blob.Name == AsnApprovals {
 			if target.stat.Nlink > 1 {
-				repos.Diag(sum.String()[:8]+"...",
-					"already linked")
+				repos.Diag(sum, "already linked")
 				continue
 			}
 			if !author.MayApproveFor(target.owner) {
@@ -354,8 +352,7 @@ func (repos *Repos) ProcSums(x Sender, f *file.File, blob *Blob) error {
 			repos.lsm(x, &sum, target.fn, target.f, &target.blob)
 		} else if blob.Name == AsnRemovals {
 			if target.stat.Nlink == 1 {
-				repos.Diag(sum.String()[:8]+"...",
-					"has no links")
+				repos.Diag(sum, "has no links")
 				continue
 			}
 			if !author.MayEdit(target.owner) {
@@ -503,7 +500,7 @@ func (repos *Repos) Store(x Sender, v Version, blob *Blob,
 	}
 	sum = new(Sum)
 	copy(sum[:], h.Sum([]byte{}))
-	sumFN := repos.Expand(sum.String())
+	sumFN := repos.Join(sum.PN())
 	if _, xerr := os.Stat(sumFN); os.IsNotExist(xerr) {
 		LN(f.Name(), sumFN)
 	} else {
@@ -568,15 +565,13 @@ func (repos *Repos) Store(x Sender, v Version, blob *Blob,
 		repos.lsm(x, sum, sumFN, f, blob)
 	case strings.HasSuffix(blob.Name, "/"):
 		x.Send(Mirrors, f)
-		LN(sumFN, repos.Join(owner.Join(blob.Name,
-			blob.FN(sum.String()))))
+		LN(sumFN, repos.Join(owner.Join(blob.Name, blob.FN(sum))))
 	case blob.Name == AsnApprovals || blob.Name == AsnRemovals:
 		if err = repos.ProcSums(x, f, blob); err != nil {
 			return
 		}
 		x.Send(Mirrors, f)
-		LN(sumFN, repos.Join(owner.Join(blob.Name,
-			blob.FN(sum.String()))))
+		LN(sumFN, repos.Join(owner.Join(blob.Name, blob.FN(sum))))
 	default:
 		fn := repos.Join(owner.Join(blob.Name))
 		if _, xerr := os.Stat(fn); xerr == nil {

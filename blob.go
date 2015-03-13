@@ -147,8 +147,9 @@ func NewBlobWith(owner, author *PubEncr, s string, t time.Time) (blob *Blob) {
 }
 
 // FN returns a formatted file name of its time and abbreviated sum.
-func (blob *Blob) FN(sum string) string {
-	return fmt.Sprintf("%016x_%s", blob.Time.UnixNano(), sum[:16])
+func (blob *Blob) FN(sum *Sum) string {
+	return fmt.Sprintf("%016x_%s", blob.Time.UnixNano(),
+		sum.FullString()[:16])
 }
 
 // Free the Blob by pooling or release it to GC if pool is full.

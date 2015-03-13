@@ -742,7 +742,7 @@ func (ses *Ses) ExecObjDump(r io.Reader, args ...string) interface{} {
 		}
 		pos, _ := f.Seek(0, os.SEEK_CUR)
 		fi, _ := f.Stat()
-		fmt.Fprintln(out, "sum:", sum.String()[:8]+"...")
+		fmt.Fprintln(out, "sum:", sum)
 		fmt.Fprintln(out, blob)
 		switch blob.Name {
 		case AsnAuth:

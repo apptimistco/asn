@@ -407,7 +407,7 @@ func (cmd *Command) ShowSums() {
 				sum := NewSumOf(f)
 				out = append(out, *sum)
 				fmt.Fprintf(cmd.Stdout, "%s:\t%s\n",
-					fi.Name(), sum.String())
+					fi.Name(), sum.FullString())
 				sum = nil
 			}
 		}

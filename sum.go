@@ -8,6 +8,7 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"io"
+	"path/filepath"
 )
 
 const (
@@ -30,4 +31,19 @@ func NewSumOf(r io.Reader) (sum *Sum) {
 	return
 }
 
-func (sum *Sum) String() string { return hex.EncodeToString((*sum)[:]) }
+func (sum *Sum) FullString() string {
+	return hex.EncodeToString((*sum)[:])
+}
+
+func (sum *Sum) ShortString() string {
+	return sum.FullString()[:8]
+}
+
+func (sum *Sum) String() string {
+	return Ellipsis(sum.ShortString())
+}
+
+func (sum *Sum) PN() string {
+	s := sum.FullString()
+	return filepath.Join(s[:ReposTopSz], s[ReposTopSz:])
+}

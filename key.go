@@ -423,13 +423,13 @@ func (k *ServiceKeys) String() string {
 	return string(b)
 }
 
-func (x *Nonce) String() string     { return x.ShortString() + "..." }
-func (x *PubAuth) String() string   { return x.ShortString() + "..." }
-func (x *PubEncr) String() string   { return x.ShortString() + "..." }
-func (x *SecAuth) String() string   { return x.ShortString() + "..." }
-func (x *SecEncr) String() string   { return x.ShortString() + "..." }
-func (x *Shared) String() string    { return x.ShortString() + "..." }
-func (x *Signature) String() string { return x.ShortString() + "..." }
+func (x *Nonce) String() string     { return Ellipsis(x.ShortString()) }
+func (x *PubAuth) String() string   { return Ellipsis(x.ShortString()) }
+func (x *PubEncr) String() string   { return Ellipsis(x.ShortString()) }
+func (x *SecAuth) String() string   { return Ellipsis(x.ShortString()) }
+func (x *SecEncr) String() string   { return Ellipsis(x.ShortString()) }
+func (x *Shared) String() string    { return Ellipsis(x.ShortString()) }
+func (x *Signature) String() string { return Ellipsis(x.ShortString()) }
 
 func (x *PubEncrList) String() string {
 	b := new(bytes.Buffer)
