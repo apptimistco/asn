@@ -16,6 +16,7 @@ const (
 	AsnAuthor      = "asn/author"
 	AsnBridge      = "asn/bridge"
 	AsnEditors     = "asn/editors"
+	AsnInvites     = "asn/invites"
 	AsnMark        = "asn/mark"
 	AsnMessages    = "asn/messages"
 	AsnModerators  = "asn/moderators"
@@ -37,6 +38,10 @@ func (c Cache) Author() *PubEncr {
 
 func (c Cache) Editors() *PubEncrList {
 	return c.PubEncrList(AsnEditors)
+}
+
+func (c Cache) Invites() *PubEncrList {
+	return c.PubEncrList(AsnInvites)
 }
 
 func (c Cache) Load(dn string) (err error) {

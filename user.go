@@ -30,6 +30,7 @@ func newUser(key *PubEncr, keystr string) (u *User) {
 			AsnAuth:        &CacheEntry{Time0, &PubAuth{}},
 			AsnAuthor:      &CacheEntry{Time0, &PubEncr{}},
 			AsnEditors:     &CacheEntry{Time0, &PubEncrList{}},
+			AsnInvites:     &CacheEntry{Time0, &PubEncrList{}},
 			AsnMark:        &CacheEntry{Time0, &Mark{}},
 			AsnModerators:  &CacheEntry{Time0, &PubEncrList{}},
 			AsnSubscribers: &CacheEntry{Time0, &PubEncrList{}},

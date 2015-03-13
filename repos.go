@@ -537,8 +537,8 @@ func (repos *Repos) Store(x Sender, v Version, blob *Blob,
 		}
 		x.Send(Mirrors, f)
 		LN(sumFN, repos.Join(owner.Join(blob.Name)))
-	case blob.Name == AsnEditors || blob.Name == AsnModerators ||
-		blob.Name == AsnSubscribers:
+	case blob.Name == AsnEditors || blob.Name == AsnInvites ||
+		blob.Name == AsnModerators || blob.Name == AsnSubscribers:
 		err = ReadFromFile(owner.cache.PubEncrList(blob.Name), f)
 		if err != nil {
 			return
@@ -546,9 +546,8 @@ func (repos *Repos) Store(x Sender, v Version, blob *Blob,
 		x.Send(Mirrors, f)
 		LN(sumFN, repos.Join(owner.Join(blob.Name)))
 	case blob.Name == AsnBridge, blob.Name == AsnBridge+"/":
-		// don't link, just send to all subscribers
-		subscribers := owner.cache.Subscribers()
-		for _, k := range *subscribers {
+		// don't link, just send to all invites
+		for _, k := range *(owner.cache.Invites()) {
 			x.Send(&k, f)
 		}
 		syscall.Unlink(sumFN)
