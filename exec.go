@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/apptimistco/asn/debug"
+	"github.com/apptimistco/asn/debug/file"
 	"gopkg.in/yaml.v1"
 )
 
@@ -156,52 +157,59 @@ func (ses *Ses) GoExec(req Req, pdu *PDU, args ...string) {
 	ses.Unlock()
 }
 
-func (ses *Ses) Exec(req Req, in ReadWriteToer, args ...string) interface{} {
+func (ses *Ses) Exec(req Req, in ReadWriteToer,
+	args ...string) (v interface{}) {
+	defer func() {
+		if err, iserr := v.(error); iserr && err != nil {
+			ses.asn.Diag(debug.Depth(2), err)
+		}
+	}()
 	ses.asn.Trace(debug.Id(ExecReqId), "rx", req, "exec", args)
 	switch args[0] {
 	case "exec-help", "help":
-		return UsageCommands
+		v = UsageCommands
 	case "approve":
-		return ses.ExecApprove(in, args[1:]...)
+		v = ses.ExecApprove(in, args[1:]...)
 	case "auth":
-		return ses.ExecAuth(args[1:]...)
+		v = ses.ExecAuth(args[1:]...)
 	case "blob":
-		return ses.ExecBlob(in, args[1:]...)
+		v = ses.ExecBlob(in, args[1:]...)
 	case "cat":
-		return ses.ExecCat(req, in, args[1:]...)
+		v = ses.ExecCat(req, in, args[1:]...)
 	case "clone":
-		return ses.ExecClone(args[1:]...)
+		v = ses.ExecClone(args[1:]...)
 	case "echo":
-		return strings.Join(args[1:], " ") + "\n"
+		v = strings.Join(args[1:], " ") + "\n"
 	case "fetch":
-		return ses.ExecFetch(in, args[1:]...)
+		v = ses.ExecFetch(in, args[1:]...)
 	case "filter":
-		return ses.ExecFilter(req, in, args[1:]...)
+		v = ses.ExecFilter(req, in, args[1:]...)
 	case "gc":
-		return ses.ExecGC(req, args[1:]...)
+		v = ses.ExecGC(req, args[1:]...)
 	case "iam":
-		return ses.ExecIam(args[1:]...)
+		v = ses.ExecIam(args[1:]...)
 	case "ls":
-		return ses.ExecLS(req, in, args[1:]...)
+		v = ses.ExecLS(req, in, args[1:]...)
 	case "mark":
-		return ses.ExecMark(args[1:]...)
+		v = ses.ExecMark(args[1:]...)
 	case "newuser":
-		return ses.ExecNewUser(args[1:]...)
+		v = ses.ExecNewUser(args[1:]...)
 	case "objdump":
-		return ses.ExecObjDump(in, args[1:]...)
+		v = ses.ExecObjDump(in, args[1:]...)
 	case "rm":
-		return ses.ExecRM(in, args[1:]...)
+		v = ses.ExecRM(in, args[1:]...)
 	case "trace":
-		return ses.ExecTrace(args[1:]...)
+		v = ses.ExecTrace(args[1:]...)
 	case "users":
-		return ses.ExecUsers(args[1:]...)
+		v = ses.ExecUsers(args[1:]...)
 	case "vouch":
-		return ses.ExecVouch(args[1:]...)
+		v = ses.ExecVouch(args[1:]...)
 	case "who":
-		return ses.ExecWho(req, args[1:]...)
+		v = ses.ExecWho(req, args[1:]...)
 	default:
-		return errors.New("unknown exec command: " + args[0])
+		v = errors.New("unknown exec command: " + args[0])
 	}
+	return v
 }
 
 func (ses *Ses) ExecApprove(r io.Reader, args ...string) interface{} {
@@ -442,21 +450,6 @@ func (ses *Ses) ExecFetch(r io.Reader, args ...string) interface{} {
 		return ErrCantExec
 	}
 	err = ses.Blobber(func(fn string) error {
-		if strings.HasSuffix(fn, filepath.FromSlash(AsnMark)) {
-			user, _ := ses.asn.repos.ParsePath(fn)
-			if user == nil {
-				ses.asn.Diag("no user for", fn)
-				return os.ErrNotExist
-			}
-			pdu := NewPDUBuf()
-			NewFH(&ses.user.key,
-				ses.cfg.Keys.Server.Pub.Encr,
-				AsnMark).WriteTo(pdu)
-			user.cache.Mark().WriteTo(pdu)
-			ses.asn.Fixme("sent cached", fn)
-			ses.asn.Tx(pdu)
-			return nil
-		}
 		ses.asn.Tx(NewPDUFN(fn))
 		return nil
 	}, r, args...)
@@ -663,15 +656,23 @@ func (ses *Ses) ExecMark(args ...string) interface{} {
 }
 
 func (ses *Ses) ExecNewUser(args ...string) interface{} {
+	var err error
+	defer func() {
+		if err != nil {
+			ses.asn.Diag(debug.Depth(2), err)
+		}
+	}()
 	if len(args) < 1 {
-		return ErrUsageNewUser
+		err = ErrUsageNewUser
+		return err
 	}
 	isBinary := args[0] == "-b"
 	if isBinary {
 		args = args[1:]
 	}
 	if len(args) != 1 {
-		return ErrUsageNewUser
+		err = ErrUsageNewUser
+		return err
 	}
 	owner := ses.user
 	k, err := NewRandomUserKeys()
@@ -729,38 +730,16 @@ func (ses *Ses) ExecObjDump(r io.Reader, args ...string) interface{} {
 				ses.asn.Diag(debug.Depth(2), err)
 			}
 		}()
-		f, err := os.Open(fn)
+		f, err := file.Open(fn)
 		if err != nil {
 			return
 		}
 		defer f.Close()
-		sum := NewSumOf(f)
-		f.Seek(BlobMagicOff, os.SEEK_SET)
-		blob, err := NewBlobFrom(f)
-		if err != nil {
-			return
-		}
-		pos, _ := f.Seek(0, os.SEEK_CUR)
-		fi, _ := f.Stat()
-		fmt.Fprintln(out, "sum:", sum)
-		fmt.Fprintln(out, blob)
-		switch blob.Name {
-		case AsnAuth:
-			var auth PubAuth
-			f.Read(auth[:])
-			fmt.Fprintln(out, "auth:", auth)
-		case AsnAuthor:
-			var author PubEncr
-			f.Read(author[:])
-			fmt.Fprintln(out, "author:", author)
-		case AsnMark:
-			var mark Mark
-			mark.ReadFrom(f)
-			fmt.Fprintln(out, &mark)
-		default:
-			fmt.Fprintln(out, "size:", fi.Size())
-			fmt.Fprintln(out, "len:", fi.Size()-pos)
-		}
+		v := new(Version)
+		id := new(Id)
+		v.ReadFrom(f)
+		id.ReadFrom(f)
+		err = ObjDump(out, f)
 		return
 	}, r, args...); err != nil {
 		ses.asn.Diag(err)

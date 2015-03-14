@@ -33,9 +33,10 @@ var (
 	ErrNOENT    = errors.New("No such USER, SHA or FILE")
 )
 
-func ReadFromFile(rf ReadFromer, f *file.File) error {
+func ReadFromFile(rf ReadFromer, f *file.File) (err error) {
 	dup, err := f.Dup()
 	if err != nil {
+		debug.Diag.Println(err)
 		return err
 	}
 	defer dup.Close()
@@ -45,12 +46,15 @@ func ReadFromFile(rf ReadFromer, f *file.File) error {
 		blob Blob
 	)
 	if _, err = v.ReadFrom(dup); err != nil {
+		debug.Diag.Println(err)
 		return err
 	}
 	if _, err = id.ReadFrom(dup); err != nil {
+		debug.Diag.Println(err)
 		return err
 	}
 	if _, err = blob.ReadFrom(dup); err != nil {
+		debug.Diag.Println(err)
 		return err
 	}
 	_, err = rf.ReadFrom(dup)
@@ -80,6 +84,7 @@ func (repos *Repos) Set(v interface{}) error {
 	}
 	repos.dn = dn
 	repos.Debug.Set(dn)
+	repos.users.Set(dn)
 	if err := repos.LoadUsers(); err != nil {
 		repos.dn = ""
 		repos.tmp.Reset()

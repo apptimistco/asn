@@ -6,7 +6,6 @@ package main
 
 import (
 	"bufio"
-	"fmt"
 	"io"
 	"net"
 	"runtime"
@@ -49,10 +48,10 @@ func (cmd *Command) Admin(args ...string) {
 	if err != nil {
 		runtime.Goexit()
 	}
-	if err = adm.repos.Set(adm.cmd.Cfg.Dir); err != nil {
+	adm.Debug.Set(cmd.Cfg.Name)
+	if err = adm.repos.Set(cmd.Cfg.Dir); err != nil {
 		runtime.Goexit()
 	}
-	adm.Debug.Set(adm.cmd.Cfg.Name)
 	defer func() { adm.repos.Reset() }()
 	adm.asn.Init()
 	adm.asn.Set(&adm.repos)
@@ -259,7 +258,7 @@ func (adm *Adm) handler() {
 					pdu.Clone()
 					adm.rxq <- pdu
 				} else {
-					adm.PrintBlob(pdu)
+					adm.ObjDump(pdu)
 				}
 			default:
 				adm.Diag("unsupported pdu:", id)
@@ -360,27 +359,9 @@ func (adm *Adm) Login() (err error) {
 	return
 }
 
-func (adm *Adm) PrintBlob(pdu *PDU) {
+func (adm *Adm) ObjDump(pdu *PDU) {
 	defer pdu.Free()
-	// Version and Id already read in handler
-	blob, err := NewBlobFrom(pdu)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	defer blob.Free()
-	switch blob.Name {
-	case AsnMark:
-		var mark Mark
-		mark.ReadFrom(pdu)
-		fmt.Println(adm.cmd.Stdout, mark)
-	case "", AsnMessages, AsnMessages + "/":
-		io.Copy(adm.cmd.Stdout, pdu)
-		adm.cmd.Stdout.Write(NL)
-	default:
-		fmt.Println("don't know how to display",
-			blob.Name)
-	}
+	ObjDump(adm.cmd.Stdout, pdu)
 }
 
 func (adm *Adm) Send(_ *PubEncr, _ *file.File) {}

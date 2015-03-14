@@ -67,11 +67,10 @@ func (cmd *Command) Server(args ...string) {
 	if err != nil {
 		runtime.Goexit()
 	}
-	if err = srv.repos.Set(srv.cmd.Cfg.Dir); err != nil {
+	srv.Mutex.Set(cmd.Cfg.Name)
+	if err = srv.repos.Set(cmd.Cfg.Dir); err != nil {
 		runtime.Goexit()
 	}
-	srv.Mutex.Set(srv.cmd.Cfg.Name)
-	srv.repos.users.Mutex.Set(srv.cmd.Cfg.Name)
 	defer func() { srv.repos.Reset() }()
 	for _, k := range []*UserKeys{
 		srv.cmd.Cfg.Keys.Admin,

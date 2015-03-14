@@ -59,7 +59,7 @@ func (u *User) Bytes() []byte {
 
 func (u *User) DN() string {
 	if u.dn == "" {
-		u.dn = userDN(u.keystr)
+		u.dn = userDN(u.FullString())
 	}
 	return u.dn
 }
@@ -98,7 +98,7 @@ func (u *User) OnList(l *PubEncrList) bool {
 
 func (u *User) Join(elements ...string) string {
 	if u.dn == "" {
-		u.dn = userDN(u.String())
+		u.dn = userDN(u.FullString())
 	}
 	path := u.dn
 	for _, x := range elements {

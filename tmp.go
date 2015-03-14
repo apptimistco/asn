@@ -84,7 +84,7 @@ func (tmp *Tmp) Set(v interface{}) (err error) {
 		} else {
 			tmp.dn = t
 		}
-		tmp.Mutex.Set(tmpStr)
+		tmp.Mutex.Set(tmp.dn)
 		if err = MkdirAll(tmp.dn); err != nil {
 			return
 		}

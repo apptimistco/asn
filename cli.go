@@ -51,10 +51,10 @@ func (adm *Adm) CLI() (err error) {
 			case pdu := <-adm.rxq:
 				if inrl {
 					println()
-					adm.PrintBlob(pdu)
+					adm.ObjDump(pdu)
 					gnureadline.Rl_resize_terminal()
 				} else {
-					adm.PrintBlob(pdu)
+					adm.ObjDump(pdu)
 				}
 			case sig := <-winch:
 				if sig == syscall.SIGWINCH {

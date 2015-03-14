@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 
+	"github.com/apptimistco/asn/debug"
 	"github.com/apptimistco/asn/debug/mutex"
 )
 
@@ -18,6 +19,8 @@ type Users struct {
 }
 
 func (users *Users) ForEachUser(f func(*User) error) error {
+	users.Diag(debug.Depth(2), "lock")
+	defer users.Diag(debug.Depth(2), "unlock")
 	users.Lock()
 	defer users.Unlock()
 	for _, u := range users.l {
@@ -71,7 +74,7 @@ func (users *Users) Reset() {
 func (users *Users) Set(v interface{}) error {
 	switch t := v.(type) {
 	case string:
-		users.Mutex.Set(t + " users")
+		users.Mutex.Set(t + "{users}")
 	default:
 		return os.ErrInvalid
 	}
@@ -80,6 +83,7 @@ func (users *Users) Set(v interface{}) error {
 
 // Binary search for longest matching key.
 func (users *Users) User(key *PubEncr) (user *User) {
+	users.Fixme(debug.Depth(2), "User")
 	users.Lock()
 	defer users.Unlock()
 	n := len(users.l)
@@ -94,6 +98,8 @@ func (users *Users) User(key *PubEncr) (user *User) {
 
 // Binary search for longest matching key-string.
 func (users *Users) UserString(ks string) (user *User) {
+	users.Diag(debug.Depth(2), "lock")
+	defer users.Diag(debug.Depth(2), "unlock")
 	users.Lock()
 	defer users.Unlock()
 	n := len(users.l)
