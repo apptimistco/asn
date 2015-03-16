@@ -118,6 +118,7 @@ var (
 	}
 	NL    = []byte{'\n'}
 	Time0 = time.Time{}
+	Debug = debug.Debug(AsnStr)
 )
 
 func init() {
@@ -194,7 +195,7 @@ func LN(src, dst string) {
 	if err := syscall.Link(src, dst); err != nil {
 		panic(err)
 	}
-	debug.Fixme.Output(2, fmt.Sprintln("ln", src, dst))
+	Debug.Fixme(debug.Depth(2), "ln", src, dst)
 }
 
 func main() {
