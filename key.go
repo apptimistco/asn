@@ -433,8 +433,11 @@ func (x *Signature) String() string { return Ellipsis(x.ShortString()) }
 
 func (x *PubEncrList) String() string {
 	b := new(bytes.Buffer)
-	for _, k := range *x {
-		fmt.Fprintln(b, k)
+	for i, k := range *x {
+		if i > 0 {
+			fmt.Fprint(b, "\n")
+		}
+		fmt.Fprint(b, &k)
 	}
 	return b.String()
 }
