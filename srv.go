@@ -200,12 +200,14 @@ func (srv *Server) handler(conn net.Conn) {
 			user.logins -= 1
 		}
 		srv.rm(&ses)
+		srv.Log("disconnected", &ses.Keys.Client.Ephemeral)
 		ses.Reset()
 	}()
 	conn.Read(ses.Keys.Client.Ephemeral[:])
 	ses.asn.Set(NewBox(2, srv.cmd.Cfg.Keys.Nonce,
 		&ses.Keys.Client.Ephemeral, svc.Server.Pub.Encr,
 		svc.Server.Sec.Encr))
+	srv.Log("connected", &ses.Keys.Client.Ephemeral)
 	for {
 		pdu, opened := <-ses.asn.rx.ch
 		if !opened {
@@ -232,6 +234,9 @@ func (srv *Server) handler(conn net.Conn) {
 			if err = ses.RxLogin(pdu); err != nil {
 				panic(err)
 			}
+			ses.asn.Log("login, ephemeral:",
+				&ses.Keys.Client.Login,
+				&ses.Keys.Client.Ephemeral)
 		case BlobId:
 			if bytes.Equal(ses.Keys.Client.Login.Bytes(),
 				svc.Admin.Pub.Encr.Bytes()) ||
