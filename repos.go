@@ -523,8 +523,13 @@ func (repos *Repos) Store(x Sender, v Version, blob *Blob,
 			}
 			err = nil
 		}
-		x.Send(Mirrors, f)
 		LN(sumFN, repos.Join(owner.Join(blob.Name)))
+		repos.users.ForEachLoggedInUser(func(u *User) error {
+			if u != owner {
+				x.Send(&u.key, f)
+			}
+			return nil
+		})
 		// don't retain sum link as there is no need to recover a mark
 		syscall.Unlink(sumFN)
 	case blob.Name == AsnAuth:
