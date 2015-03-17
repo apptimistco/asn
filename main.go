@@ -95,8 +95,7 @@ Admin CONFIG Format:
 	LogExt    = ".log"
 	ReposExt  = ".asn"
 
-	DefaultName     = "asn"
-	DefaultConfigFN = DefaultName + ConfigExt
+	DefaultConfigFN = AsnStr + ConfigExt
 	DefaultReposDN  = ReposExt
 )
 
@@ -122,7 +121,7 @@ var (
 )
 
 func init() {
-	FS = flag.NewFlagSet("asn", flag.ContinueOnError)
+	FS = flag.NewFlagSet(AsnStr, flag.ContinueOnError)
 	FS.Usage = ShowHelp
 	FS.BoolVar(&Show.help, "show-help", false,
 		`Print this and exit.`)

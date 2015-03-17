@@ -903,7 +903,7 @@ func (ses *Ses) Blobber(filter func(fn string) error, r io.Reader,
 		}
 		this, arg = ses.StripTime(arg)
 		fi, staterr := os.Stat(arg)
-		if arg == "asn" && !fi.IsDir() {
+		if arg == AsnStr && !fi.IsDir() {
 			fi = nil
 		}
 		slash := strings.Index(arg, "/")

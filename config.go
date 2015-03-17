@@ -15,7 +15,7 @@ import (
 
 var (
 	SystemConfigFN = filepath.Join("etc", DefaultConfigFN)
-	SystemReposDN  = filepath.Join("srv", DefaultName)
+	SystemReposDN  = filepath.Join("srv", AsnStr)
 )
 
 type Config struct {
@@ -94,7 +94,7 @@ func (c *Config) Parse(fn string) (err error) {
 		def.dir = fn + ReposExt
 	} else if fn == DefaultConfigFN {
 		b, err = ioutil.ReadFile(DefaultConfigFN)
-		def.name = DefaultName
+		def.name = AsnStr
 		if err != nil {
 			b, err = ioutil.ReadFile(SystemConfigFN)
 			if err != nil {
