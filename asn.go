@@ -97,14 +97,14 @@ func (asn *asn) gorx() {
 	defer func() {
 		r := recover()
 		pdu.Free()
-		close(asn.rx.ch)
-		asn.rx.going = false
 		if r != nil {
 			asn.rx.err = r.(error)
 			if asn.rx.err != io.EOF {
 				asn.Failure(debug.Depth(4), asn.rx.err)
 			}
 		}
+		close(asn.rx.ch)
+		asn.rx.going = false
 	}()
 	for {
 		l := uint16(0)
