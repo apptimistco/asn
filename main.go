@@ -179,24 +179,6 @@ func IsUser(fn string) bool {
 	return IsHex(fn) && len(fn) == 2*(PubEncrSz-1)
 }
 
-// LN creates directories if required then hard links dst with src.
-// LN panic's on error so the calling function must recover.
-func LN(src, dst string) {
-	dn := filepath.Dir(dst)
-	if _, err := os.Stat(dn); err != nil {
-		if !os.IsNotExist(err) {
-			panic(err)
-		}
-		if err := MkdirAll(dn); err != nil {
-			panic(err)
-		}
-	}
-	if err := syscall.Link(src, dst); err != nil {
-		panic(err)
-	}
-	Debug.Fixme(debug.Depth(2), "ln", src, dst)
-}
-
 func main() {
 	syscall.Umask(0007)
 	cmd := Command{
