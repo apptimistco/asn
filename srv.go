@@ -203,7 +203,16 @@ func (srv *Server) handler(conn net.Conn) {
 		srv.Log("disconnected", &ses.Keys.Client.Ephemeral)
 		ses.Reset()
 	}()
-	conn.Read(ses.Keys.Client.Ephemeral[:])
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	n, err := conn.Read(ses.Keys.Client.Ephemeral[:])
+	conn.SetReadDeadline(time.Time{})
+	if err != nil {
+		srv.Log(err)
+		panic(err)
+	}
+	if n != PubEncrSz {
+		panic(Error{"Oops!", "incomplete ephemeral key"})
+	}
 	ses.asn.Set(NewBox(2, srv.cmd.Cfg.Keys.Nonce,
 		&ses.Keys.Client.Ephemeral, svc.Server.Pub.Encr,
 		svc.Server.Sec.Encr))
