@@ -5,6 +5,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -80,7 +81,7 @@ func (asn *asn) Init() {
 	asn.rx.black = make([]byte, 0, MaxSegSz)
 	asn.tx.black = make([]byte, 0, MaxSegSz)
 	asn.rx.red = make([]byte, 0, MaxSegSz)
-	asn.tx.red = make([]byte, 0, MaxSegSz)
+	asn.tx.red = make([]byte, 0, 2+MaxSegSz)
 	asn.acker.Init()
 }
 
@@ -171,7 +172,8 @@ func (asn *asn) gotx() {
 			asn.Diag("quit pdutx")
 			runtime.Goexit()
 		}
-		if err := pb.pdu.Open(); err != nil {
+		err := pb.pdu.Open()
+		if err != nil {
 			panic(err)
 		}
 		for n := pb.pdu.Len(); n > 0; n = pb.pdu.Len() {
@@ -179,25 +181,22 @@ func (asn *asn) gotx() {
 				n = maxBlack
 			}
 			asn.tx.black = asn.tx.black[:n]
-			if _, err := pb.pdu.Read(asn.tx.black); err != nil {
+			if _, err = pb.pdu.Read(asn.tx.black); err != nil {
 				panic(err)
 			}
-			asn.tx.red = asn.tx.red[:0]
-			b, err := pb.box.Seal(asn.tx.red, asn.tx.black)
+			asn.tx.red = asn.tx.red[:2]
+			asn.tx.red, err = pb.box.Seal(asn.tx.red, asn.tx.black)
 			if err != nil {
 				panic(err)
 			}
-			l := uint16(len(b))
+			l := uint16(len(asn.tx.red[2:]))
 			if pb.pdu.Len() > 0 {
 				l |= MoreFlag
 			}
-			if _, err = (NBOWriter{asn}).WriteNBO(l); err != nil {
+			binary.BigEndian.PutUint16(asn.tx.red[:2], l)
+			if _, err = asn.Write(asn.tx.red); err != nil {
 				panic(err)
 			}
-			if _, err = asn.Write(b); err != nil {
-				panic(err)
-			}
-			// asn.Diagf("pdutx %p; len %d\n", pb.pdu, l & ^MoreFlag)
 		}
 		pb.pdu.Free()
 		pb.pdu = nil
