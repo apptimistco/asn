@@ -204,27 +204,32 @@ func (asn *asn) gotx() {
 	}
 }
 
+func IsNetTimeout(err error) bool {
+	e, ok := err.(net.Error)
+	return ok && e.Timeout()
+}
+
 // Read full buffer from asn.conn unless preempted with state == closed.
 func (asn *asn) Read(b []byte) (n int, err error) {
 	for i := 0; n < len(b); n += i {
+		if asn.IsClosed() {
+			err = io.EOF
+			asn.Diag("closed")
+			return
+		}
 		asn.conn.SetReadDeadline(time.Now().Add(ConnTO))
 		i, err = asn.conn.Read(b[n:])
-		if err != nil {
-			if asn.IsClosed() {
-				err = io.EOF
-				break
-			}
-			eto, ok := err.(net.Error)
-			if !ok || !eto.Timeout() {
-				break
-			}
-			err = nil
+		asn.conn.SetReadDeadline(time.Time{})
+		if err != nil && !IsNetTimeout(err) {
+			asn.Diag(err)
+			return
 		}
 	}
 	return
 }
 
 func (asn *asn) Reset() {
+	asn.Diag(debug.Depth(2), "asn reset")
 	if asn.conn != nil {
 		if asn.state != closed {
 			asn.state = closed
@@ -289,16 +294,15 @@ func (asn *asn) Write(b []byte) (n int, err error) {
 	for i := 0; n < len(b); n += i {
 		if asn.IsClosed() {
 			err = io.EOF
-			break
+			asn.Diag("closed")
+			return
 		}
 		asn.conn.SetWriteDeadline(time.Now().Add(ConnTO))
 		i, err = asn.conn.Write(b[n:])
-		if err != nil {
-			eto, ok := err.(net.Error)
-			if !ok || !eto.Timeout() {
-				break
-			}
-			err = nil
+		asn.conn.SetWriteDeadline(time.Time{})
+		if err != nil && !IsNetTimeout(err) {
+			asn.Diag(err)
+			return
 		}
 	}
 	return
