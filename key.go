@@ -212,6 +212,35 @@ func (x PubEncrList) Has(v interface{}) bool {
 	return false
 }
 
+func (l *PubEncrList) KeyAdd(k *PubEncr) {
+	for _, x := range *l {
+		if bytes.Equal(x.Bytes(), k.Bytes()) {
+			return
+		}
+	}
+	*l = append(*l, *k)
+}
+
+func (l *PubEncrList) KeyDel(k *PubEncr) {
+	for i, x := range *l {
+		if bytes.Equal(x.Bytes(), k.Bytes()) {
+			if i == 0 {
+				if len(*l) == 1 {
+					*l = []PubEncr(*l)[:0]
+				} else {
+					*l = []PubEncr(*l)[1:]
+				}
+			} else if i == len(*l) {
+				*l = []PubEncr(*l)[:i-1]
+			} else {
+				*l = append([]PubEncr(*l)[:i-1],
+					[]PubEncr(*l)[i+1:]...)
+			}
+			return
+		}
+	}
+}
+
 func (x *PubAuth) ReadFrom(r io.Reader) (int64, error) {
 	i, err := r.Read(x.Bytes())
 	return int64(i), err
@@ -252,7 +281,7 @@ func (x *Nonce) Recast() *[NonceSz]byte { return (*[NonceSz]byte)(x) }
 func (x *PubAuth) Recast() *[PubAuthSz]byte { return (*[PubAuthSz]byte)(x) }
 func (x *PubEncr) Recast() *[PubEncrSz]byte { return (*[PubEncrSz]byte)(x) }
 
-func (x *PubEncrList) Recast() *[]PubEncr { return (*[]PubEncr)(x) }
+func (x *PubEncrList) Recast() []PubEncr { return ([]PubEncr)(*x) }
 
 func (x *SecAuth) Recast() *[SecAuthSz]byte { return (*[SecAuthSz]byte)(x) }
 func (x *SecEncr) Recast() *[SecEncrSz]byte { return (*[SecEncrSz]byte)(x) }

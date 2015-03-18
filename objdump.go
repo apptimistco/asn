@@ -7,6 +7,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"strings"
 )
 
 // ObjDump expects that reader has read Version and Id
@@ -16,6 +17,17 @@ func ObjDump(w io.Writer, r io.Reader) (err error) {
 		return
 	}
 	fmt.Fprintln(w, blob)
+	for _, fn := range AsnPubEncrLists {
+		if strings.HasPrefix(blob.Name, fn+"/") {
+			// only show blob header
+			return
+		} else if blob.Name == fn {
+			l := new(PubEncrList)
+			l.ReadFrom(r)
+			fmt.Fprintln(w, l)
+			return
+		}
+	}
 	switch blob.Name {
 	case AsnAuth:
 		auth := new(PubAuth)
@@ -29,10 +41,6 @@ func ObjDump(w io.Writer, r io.Reader) (err error) {
 		mark := new(Mark)
 		mark.ReadFrom(r)
 		fmt.Fprintln(w, mark)
-	case AsnEditors, AsnInvites, AsnModerators, AsnSubscribers:
-		l := new(PubEncrList)
-		l.ReadFrom(r)
-		fmt.Fprintln(w, l)
 	case "", AsnMessages, AsnMessages + "/":
 		_, err = io.Copy(w, r)
 		w.Write(NL)

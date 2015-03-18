@@ -5,6 +5,7 @@
 package main
 
 import (
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"time"
@@ -26,6 +27,13 @@ const (
 	AsnVouchers    = "asn/vouchers"
 )
 
+var AsnPubEncrLists = []string{
+	AsnEditors,
+	AsnInvites,
+	AsnModerators,
+	AsnSubscribers,
+}
+
 type Cache map[string]*CacheEntry
 
 func (c Cache) Auth() *PubAuth {
@@ -44,12 +52,10 @@ func (c Cache) Invites() *PubEncrList {
 	return c.PubEncrList(AsnInvites)
 }
 
-func (c Cache) Load(dn string) (err error) {
-	var f *os.File
-	defer f.Close()
+func (c Cache) Load(dn string) error {
 	for fn, e := range c {
-		ffn := filepath.Join(dn, fn)
-		f, err = os.Open(ffn)
+		pn := filepath.Join(dn, fn)
+		fi, err := os.Stat(pn)
 		if err != nil {
 			if os.IsNotExist(err) {
 				err = nil
@@ -58,18 +64,39 @@ func (c Cache) Load(dn string) (err error) {
 				return err
 			}
 		}
-		var fh FH
-		if _, err = fh.ReadFrom(f); err != nil {
-			return &Error{ffn, err.Error()}
+		if fi.IsDir() {
+			dir, err := ioutil.ReadDir(pn)
+			if err != nil {
+				return &Error{pn, err.Error()}
+			}
+			for _, fi := range dir {
+				keystr := fi.Name()
+				key, err := NewPubEncr(keystr)
+				if err != nil {
+					return err
+				}
+				c.PubEncrList(fn).KeyAdd(key)
+			}
+			e.Time = time.Now()
+		} else {
+			f, err := os.Open(pn)
+			if err != nil {
+				return err
+			}
+			var fh FH
+			if _, err = fh.ReadFrom(f); err != nil {
+				f.Close()
+				return &Error{pn, err.Error()}
+			}
+			e.Time = fh.Blob.Time
+			_, err = e.ReadFrom(f)
+			f.Close()
+			if err != nil {
+				return &Error{pn, err.Error()}
+			}
 		}
-		e.Time = fh.Blob.Time
-		_, err = e.ReadFrom(f)
-		if err != nil {
-			return &Error{ffn, err.Error()}
-		}
-		f.Close()
 	}
-	return
+	return nil
 }
 
 func (c Cache) Mark() *Mark {

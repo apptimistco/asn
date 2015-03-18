@@ -220,7 +220,7 @@ func (ses *Ses) ExecApprove(r io.Reader, args ...string) interface{} {
 	sums := make(Sums, 0)
 	defer func() { sums = nil }()
 	err := ses.Blobber(func(fn string) error {
-		// Permission to remove is checked in repos.ProcSums()
+		// Permission is checked in repos.Approvals()
 		f, err := os.Open(fn)
 		if err != nil {
 			return err
@@ -288,8 +288,7 @@ func (ses *Ses) ExecBlob(in ReadWriteToer, args ...string) interface{} {
 		}
 	}
 	var sum *Sum
-	svc := ses.cfg.Keys
-	err := ses.asn.repos.Permission(owner, ses.user, svc, name)
+	err := ses.asn.repos.Permission(owner, ses.user, name)
 	if err != nil {
 		return err
 	}

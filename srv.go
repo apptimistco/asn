@@ -71,6 +71,7 @@ func (cmd *Command) Server(args ...string) {
 	if err = srv.repos.Set(cmd.Cfg.Dir); err != nil {
 		runtime.Goexit()
 	}
+	srv.repos.Set(cmd.Cfg.Keys)
 	defer func() { srv.repos.Reset() }()
 	for _, k := range []*UserKeys{
 		srv.cmd.Cfg.Keys.Admin,

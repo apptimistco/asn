@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/sha512"
 	"errors"
@@ -66,29 +67,71 @@ type Repos struct {
 	dn    string
 	tmp   Tmp
 	users Users
+	svc   *ServiceKeys
 }
 
-func (repos *Repos) Reset() {
-	repos.tmp.Reset()
-	repos.users.Reset()
-	repos.dn = ""
-}
-
-func (repos *Repos) Set(v interface{}) error {
-	dn, ok := v.(string)
-	if !ok {
-		return os.ErrInvalid
-	}
-	if err := repos.tmp.Set(dn); err != nil {
+func (repos *Repos) Approvals(x Sender, f *file.File, blob *Blob) error {
+	var (
+		sum Sum
+		t   struct {
+			fn    string
+			f     *file.File
+			fi    os.FileInfo
+			v     Version
+			id    Id
+			blob  Blob
+			owner *User
+			stat  syscall.Stat_t
+		}
+	)
+	_, err := f.Seek(BlobNameOff+int64(len(blob.Name)), os.SEEK_SET)
+	if err != nil {
 		return err
 	}
-	repos.dn = dn
-	repos.Debug.Set(dn)
-	repos.users.Set(dn)
-	if err := repos.LoadUsers(); err != nil {
-		repos.dn = ""
-		repos.tmp.Reset()
-		return err
+	author := repos.users.User(&blob.Author)
+	for {
+		if _, err = f.Read(sum[:]); err != nil {
+			if err == io.EOF {
+				err = nil
+			}
+			return err
+		}
+		t.fn = repos.Join(sum.PN())
+		if err = syscall.Stat(t.fn, &t.stat); err != nil {
+			err = nil
+			continue
+		}
+		if t.f, err = file.Open(t.fn); err != nil {
+			return err
+		}
+		t.fi, _ = t.f.Stat()
+		t.v.ReadFrom(t.f)
+		t.id.ReadFrom(t.f)
+		t.blob.ReadFrom(t.f)
+		t.f.Close()
+		t.f = nil
+		t.owner = repos.users.User(&t.blob.Owner)
+		if t.owner == nil {
+			continue
+		}
+		if t.stat.Nlink > 1 {
+			repos.Diag(sum, "already linked")
+			continue
+		}
+		if !author.MayApproveFor(t.owner) {
+			repos.Diag(author.keystr[:8]+"...",
+				"may not approve for",
+				t.owner.keystr[:8]+"...")
+			continue
+		}
+		if t.blob.Name != "" &&
+			t.blob.Name != AsnMessages &&
+			t.blob.Name != AsnMessages+"/" {
+			repos.Diag("ignoring", t.blob.Name,
+				": you may only approve", AsnMessages)
+			continue
+		}
+		repos.lsm(x, &sum, t.fn, t.f, &t.blob)
 	}
 	return nil
 }
@@ -291,96 +334,6 @@ func (repos *Repos) Open(fn string) (*file.File, error) {
 	return file.Open(fn)
 }
 
-// Process Approval and Removal sum lists.
-func (repos *Repos) ProcSums(x Sender, f *file.File, blob *Blob) error {
-	_, err := f.Seek(BlobNameOff+int64(len(blob.Name)), os.SEEK_SET)
-	if err != nil {
-		return err
-	}
-	author := repos.users.User(&blob.Author)
-	for {
-		var (
-			sum    Sum
-			target struct {
-				fn    string
-				f     *file.File
-				fi    os.FileInfo
-				v     Version
-				id    Id
-				blob  Blob
-				owner *User
-				stat  syscall.Stat_t
-			}
-		)
-		if _, err = f.Read(sum[:]); err != nil {
-			if err == io.EOF {
-				err = nil
-			}
-			return err
-		}
-		target.fn = repos.Join(sum.PN())
-		if err = syscall.Stat(target.fn, &target.stat); err != nil {
-			err = nil
-			continue
-		}
-		if target.f, err = file.Open(target.fn); err != nil {
-			return err
-		}
-		target.fi, _ = target.f.Stat()
-		target.v.ReadFrom(target.f)
-		target.id.ReadFrom(target.f)
-		target.blob.ReadFrom(target.f)
-		target.f.Close()
-		target.f = nil
-		target.owner = repos.users.User(&target.blob.Owner)
-		if target.owner == nil {
-			continue
-		}
-		if blob.Name == AsnApprovals {
-			if target.stat.Nlink > 1 {
-				repos.Diag(sum, "already linked")
-				continue
-			}
-			if !author.MayApproveFor(target.owner) {
-				repos.Diag(author.keystr[:8]+"...",
-					"may not approve for",
-					target.owner.keystr[:8]+"...")
-				continue
-			}
-			if target.blob.Name != "" &&
-				target.blob.Name != AsnMessages &&
-				target.blob.Name != AsnMessages+"/" {
-				repos.Diag("ignoring", target.blob.Name,
-					": you may only approve", AsnMessages)
-				continue
-			}
-			repos.lsm(x, &sum, target.fn, target.f, &target.blob)
-		} else if blob.Name == AsnRemovals {
-			if target.stat.Nlink == 1 {
-				repos.Diag(sum, "has no links")
-				continue
-			}
-			if !author.MayEdit(target.owner) {
-				repos.Diag(author.keystr[:8]+"...",
-					"may not remove from",
-					target.owner.keystr[:8]+"...")
-				continue
-			}
-			root := repos.Join(target.owner.Join())
-			repos.Fixme("removal walk", root)
-			filepath.Walk(root, func(path string, fi os.FileInfo,
-				err error) error {
-				if os.SameFile(target.fi, fi) {
-					syscall.Unlink(path)
-					repos.Diag("unlinked", path)
-				}
-				return err
-			})
-		}
-	}
-	return nil
-}
-
 func (repos *Repos) ParsePath(xn string) (user *User, fn string) {
 	if strings.HasPrefix(xn, repos.dn) {
 		xn = repos.DePrefix(xn)
@@ -407,12 +360,11 @@ func (repos *Repos) ParsePath(xn string) (user *User, fn string) {
 	return
 }
 
-func (repos *Repos) Permission(owner, author *User, svc *ServiceKeys,
-	name string) error {
-	if bytes.Equal(author.key.Bytes(), svc.Admin.Pub.Encr.Bytes()) {
+func (repos *Repos) Permission(owner, author *User, name string) error {
+	if bytes.Equal(author.key.Bytes(), repos.svc.Admin.Pub.Encr.Bytes()) {
 		return nil
 	}
-	if bytes.Equal(author.key.Bytes(), svc.Server.Pub.Encr.Bytes()) {
+	if bytes.Equal(author.key.Bytes(), repos.svc.Server.Pub.Encr.Bytes()) {
 		return nil
 	}
 	if name == "" || name == AsnMessages || name == AsnMessages+"/" {
@@ -422,6 +374,74 @@ func (repos *Repos) Permission(owner, author *User, svc *ServiceKeys,
 		return nil
 	}
 	return os.ErrPermission
+}
+
+func (repos *Repos) RemovalPermission(f *file.File, blob *Blob) error {
+	author := repos.users.User(&blob.Author)
+	if bytes.Equal(author.key.Bytes(), repos.svc.Admin.Pub.Encr.Bytes()) {
+		return nil
+	}
+	if bytes.Equal(author.key.Bytes(), repos.svc.Server.Pub.Encr.Bytes()) {
+		return nil
+	}
+	_, err := f.Seek(BlobNameOff+int64(len(blob.Name)), os.SEEK_SET)
+	if err != nil {
+		return err
+	}
+	scanner := bufio.NewScanner(f)
+scan:
+	for scanner.Scan() {
+		fn := scanner.Text()
+		if fn[2] != '/' {
+			repos.Diag("unexpected filename", fn)
+			return os.ErrInvalid
+		}
+		i := strings.Index(fn[3:], "/")
+		if i < 0 {
+			repos.Diag("unexpected filename", fn)
+			return os.ErrInvalid
+		}
+		keystr := fn[:2] + fn[3:3+i]
+		key, err := NewPubEncrString(keystr)
+		if err != nil {
+			return err
+		}
+		user := repos.users.User(key)
+		if user == nil {
+			return &Error{keystr, "no such user"}
+		}
+		if author.MayEdit(user) {
+			continue scan
+		}
+		return os.ErrPermission
+	}
+	return nil
+}
+
+func (repos *Repos) Removals(f *file.File, blob *Blob) error {
+	_, err := f.Seek(BlobNameOff+int64(len(blob.Name)), os.SEEK_SET)
+	if err != nil {
+		return err
+	}
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		fn := repos.Join(scanner.Text())
+		if _, err := os.Stat(fn); err == nil {
+			if err = syscall.Unlink(fn); err != nil {
+				repos.Diag(err)
+				return err
+			}
+			repos.Diag("unlinked", fn)
+		}
+	}
+	return nil
+}
+
+func (repos *Repos) Reset() {
+	repos.tmp.Reset()
+	repos.users.Reset()
+	repos.dn = ""
+	repos.svc = nil
 }
 
 // Search the repos for the unique longest matching blob file.
@@ -456,6 +476,28 @@ func (repos *Repos) Search(x string) (match string, err error) {
 			return
 		}
 	}
+}
+
+func (repos *Repos) Set(v interface{}) error {
+	switch t := v.(type) {
+	case string:
+		if err := repos.tmp.Set(t); err != nil {
+			return err
+		}
+		repos.dn = t
+		repos.Debug.Set(t)
+		repos.users.Set(t)
+		if err := repos.LoadUsers(); err != nil {
+			repos.dn = ""
+			repos.tmp.Reset()
+			return err
+		}
+	case *ServiceKeys:
+		repos.svc = t
+	default:
+		return os.ErrInvalid
+	}
+	return nil
 }
 
 // Store contents to file with name derrived from the calculated sum and
@@ -514,6 +556,30 @@ func (repos *Repos) Store(x Sender, v Version, blob *Blob,
 	}
 	owner := repos.User(&blob.Owner)
 	author := repos.User(&blob.Author)
+	for _, fn := range AsnPubEncrLists {
+		if strings.HasPrefix(blob.Name, fn+"/") {
+			var key *PubEncr
+			keystr := blob.Name[len(fn)+1:]
+			if key, err = NewPubEncr(keystr); err != nil {
+				repos.Diag(err, "-", keystr)
+				return
+			}
+			repos.users.Lock()
+			owner.cache.PubEncrList(fn).KeyAdd(key)
+			repos.users.Unlock()
+			x.Send(Mirrors, f)
+			LN(sumFN, repos.Join(owner.Join(blob.Name)))
+			return
+		} else if blob.Name == fn {
+			err = ReadFromFile(owner.cache.PubEncrList(fn), f)
+			if err != nil {
+				return
+			}
+			x.Send(Mirrors, f)
+			LN(sumFN, repos.Join(owner.Join(blob.Name)))
+			return
+		}
+	}
 	switch {
 	case blob.Name == AsnMark:
 		err = ReadFromFile(owner.cache.Mark(), f)
@@ -534,26 +600,16 @@ func (repos *Repos) Store(x Sender, v Version, blob *Blob,
 		syscall.Unlink(sumFN)
 	case blob.Name == AsnAuth:
 		err = ReadFromFile(owner.cache.PubAuth(blob.Name), f)
-		if err != nil {
-			return
+		if err == nil {
+			x.Send(Mirrors, f)
+			LN(sumFN, repos.Join(owner.Join(blob.Name)))
 		}
-		x.Send(Mirrors, f)
-		LN(sumFN, repos.Join(owner.Join(blob.Name)))
 	case blob.Name == AsnAuthor:
 		err = ReadFromFile(owner.cache.PubEncr(blob.Name), f)
-		if err != nil {
-			return
+		if err == nil {
+			x.Send(Mirrors, f)
+			LN(sumFN, repos.Join(owner.Join(blob.Name)))
 		}
-		x.Send(Mirrors, f)
-		LN(sumFN, repos.Join(owner.Join(blob.Name)))
-	case blob.Name == AsnEditors || blob.Name == AsnInvites ||
-		blob.Name == AsnModerators || blob.Name == AsnSubscribers:
-		err = ReadFromFile(owner.cache.PubEncrList(blob.Name), f)
-		if err != nil {
-			return
-		}
-		x.Send(Mirrors, f)
-		LN(sumFN, repos.Join(owner.Join(blob.Name)))
 	case blob.Name == AsnBridge, blob.Name == AsnBridge+"/":
 		// don't link, just send to all invites
 		for _, k := range *(owner.cache.Invites()) {
@@ -565,23 +621,24 @@ func (repos *Repos) Store(x Sender, v Version, blob *Blob,
 		x.Send(Mirrors, f)
 		moderators := owner.cache.Moderators()
 		if len(*moderators) > 0 && !author.MayApproveFor(owner) {
-			repos.Fixme("moderated")
 			for _, k := range *moderators {
 				x.Send(&k, f)
 			}
-			return
+		} else {
+			repos.lsm(x, sum, sumFN, f, blob)
 		}
-		repos.Fixme("unmoderated")
-		repos.lsm(x, sum, sumFN, f, blob)
 	case strings.HasSuffix(blob.Name, "/"):
 		x.Send(Mirrors, f)
 		LN(sumFN, repos.Join(owner.Join(blob.Name, blob.FN(sum))))
-	case blob.Name == AsnApprovals || blob.Name == AsnRemovals:
-		if err = repos.ProcSums(x, f, blob); err != nil {
-			return
+	case blob.Name == AsnApprovals:
+		if err = repos.Approvals(x, f, blob); err == nil {
+			x.Send(Mirrors, f)
 		}
-		x.Send(Mirrors, f)
-		LN(sumFN, repos.Join(owner.Join(blob.Name, blob.FN(sum))))
+	case blob.Name == AsnRemovals:
+		if err = repos.RemovalPermission(f, blob); err == nil {
+			x.Send(Mirrors, f)
+			err = repos.Removals(f, blob)
+		}
 	default:
 		fn := repos.Join(owner.Join(blob.Name))
 		if _, xerr := os.Stat(fn); xerr == nil {
