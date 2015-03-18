@@ -161,7 +161,7 @@ func (ses *Ses) Exec(req Req, in ReadWriteToer,
 	args ...string) (v interface{}) {
 	defer func() {
 		if err, iserr := v.(error); iserr && err != nil {
-			ses.asn.Diag(debug.Depth(2), err)
+			ses.asn.Fixme(debug.Depth(2), err)
 		}
 	}()
 	ses.asn.Trace(debug.Id(ExecReqId), "rx", req, "exec", args)
@@ -294,7 +294,7 @@ func (ses *Ses) ExecBlob(in ReadWriteToer, args ...string) interface{} {
 		return err
 	}
 	if args[1] == "-" {
-		ses.asn.Diagf("%T\n", in)
+		ses.asn.Fixmef("%T\n", in)
 		sum, err = ses.Store(owner, ses.user, name, in)
 	} else {
 		sum, err = ses.Store(owner, ses.user, name,
