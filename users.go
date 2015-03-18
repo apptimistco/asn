@@ -19,8 +19,8 @@ type Users struct {
 }
 
 func (users *Users) ForEachUser(f func(*User) error) error {
-	users.Diag(debug.Depth(2), "lock")
-	defer users.Diag(debug.Depth(2), "unlock")
+	users.Fixme(debug.Depth(2), "lock")
+	defer users.Fixme(debug.Depth(2), "unlock")
 	users.Lock()
 	defer users.Unlock()
 	for _, u := range users.l {
@@ -98,8 +98,8 @@ func (users *Users) User(key *PubEncr) (user *User) {
 
 // Binary search for longest matching key-string.
 func (users *Users) UserString(ks string) (user *User) {
-	users.Diag(debug.Depth(2), "lock")
-	defer users.Diag(debug.Depth(2), "unlock")
+	users.Fixme(debug.Depth(2), "lock")
+	defer users.Fixme(debug.Depth(2), "unlock")
 	users.Lock()
 	defer users.Unlock()
 	n := len(users.l)
