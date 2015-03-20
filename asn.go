@@ -221,7 +221,11 @@ func (asn *asn) Read(b []byte) (n int, err error) {
 		i, err = asn.conn.Read(b[n:])
 		asn.conn.SetReadDeadline(time.Time{})
 		if err != nil && !IsNetTimeout(err) {
-			asn.Diag(err)
+			if asn.IsClosed() {
+				err = io.EOF
+			} else {
+				asn.Diag(err)
+			}
 			return
 		}
 	}
