@@ -22,6 +22,8 @@ const (
 	ConnTO   = 200 * time.Millisecond
 	MaxSegSz = 4096
 	MoreFlag = uint16(1 << 15)
+
+	WithDeadline = false
 )
 
 const (
@@ -219,7 +221,9 @@ func (asn *asn) Read(b []byte) (n int, err error) {
 			asn.Diag("closed")
 			return
 		}
-		asn.conn.SetReadDeadline(time.Now().Add(ConnTO))
+		if WithDeadline {
+			asn.conn.SetReadDeadline(time.Now().Add(ConnTO))
+		}
 		i, err = asn.conn.Read(b[n:])
 		if err != nil && !IsNetTimeout(err) {
 			if asn.IsClosed() {
@@ -302,7 +306,9 @@ func (asn *asn) Write(b []byte) (n int, err error) {
 			asn.Diag("closed")
 			return
 		}
-		asn.conn.SetWriteDeadline(time.Now().Add(ConnTO))
+		if WithDeadline {
+			asn.conn.SetWriteDeadline(time.Now().Add(ConnTO))
+		}
 		i, err = asn.conn.Write(b[n:])
 		if err != nil && !IsNetTimeout(err) {
 			asn.Diag(err)

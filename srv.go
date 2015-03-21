@@ -204,7 +204,9 @@ func (srv *Server) handler(conn net.Conn) {
 		srv.Log("disconnected", &ses.Keys.Client.Ephemeral)
 		ses.Reset()
 	}()
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	if WithDeadline {
+		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	}
 	n, err := conn.Read(ses.Keys.Client.Ephemeral[:])
 	if err != nil {
 		srv.Log(err)
