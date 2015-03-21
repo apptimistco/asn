@@ -89,7 +89,9 @@ func (asn *asn) Conn() net.Conn      { return asn.conn }
 func (asn *asn) IsOpened() bool      { return asn.state == opened }
 func (asn *asn) IsProvisional() bool { return asn.state == provisional }
 func (asn *asn) IsEstablished() bool { return asn.state == established }
-func (asn *asn) IsClosed() bool      { return asn.state == closed }
+func (asn *asn) IsClosed() bool {
+	return asn.conn == nil || asn.state == closed
+}
 
 // gorx receives, decrypts and reassembles segmented PDUs on the asn.Rx.Q
 // until error, or EOF; then closes asn.Rx.Q when done.
