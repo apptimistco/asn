@@ -412,10 +412,15 @@ func (l *SrvListener) listen(srv *Server) {
 			if err == nil {
 				l.ln.SetDeadline(time.Time{})
 				go srv.handler(conn)
-			} else if opErr, ok := err.(*net.OpError); !ok ||
-				!opErr.Timeout() {
+			} else if !IsNetOpTimeout(err) {
 				srv.Diag("accept", err)
+				runtime.Goexit()
 			}
 		}
 	}
+}
+
+func IsNetOpTimeout(err error) bool {
+	e, ok := err.(*net.OpError)
+	return ok && e.Timeout()
 }
