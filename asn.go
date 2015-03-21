@@ -294,7 +294,7 @@ func (asn *asn) Tx(pdu *PDU) {
 // Version steps down to the peer.
 func (asn *asn) Version() Version { return asn.version }
 
-// Write full buffer unless preempted byt Closed state.
+// Write full buffer unless preempted by Closed state.
 func (asn *asn) Write(b []byte) (n int, err error) {
 	for i := 0; n < len(b); n += i {
 		if asn.IsClosed() {
