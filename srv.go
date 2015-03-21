@@ -206,7 +206,6 @@ func (srv *Server) handler(conn net.Conn) {
 	}()
 	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	n, err := conn.Read(ses.Keys.Client.Ephemeral[:])
-	conn.SetReadDeadline(time.Time{})
 	if err != nil {
 		srv.Log(err)
 		panic(err)

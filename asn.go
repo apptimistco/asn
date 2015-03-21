@@ -221,7 +221,6 @@ func (asn *asn) Read(b []byte) (n int, err error) {
 		}
 		asn.conn.SetReadDeadline(time.Now().Add(ConnTO))
 		i, err = asn.conn.Read(b[n:])
-		asn.conn.SetReadDeadline(time.Time{})
 		if err != nil && !IsNetTimeout(err) {
 			if asn.IsClosed() {
 				err = io.EOF
@@ -305,7 +304,6 @@ func (asn *asn) Write(b []byte) (n int, err error) {
 		}
 		asn.conn.SetWriteDeadline(time.Now().Add(ConnTO))
 		i, err = asn.conn.Write(b[n:])
-		asn.conn.SetWriteDeadline(time.Time{})
 		if err != nil && !IsNetTimeout(err) {
 			asn.Diag(err)
 			return
