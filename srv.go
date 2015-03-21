@@ -410,6 +410,7 @@ func (l *SrvListener) listen(srv *Server) {
 			l.ln.SetDeadline(time.Now().Add(ldl))
 			conn, err := l.ln.Accept()
 			if err == nil {
+				l.ln.SetDeadline(time.Time{})
 				go srv.handler(conn)
 			} else if opErr, ok := err.(*net.OpError); !ok ||
 				!opErr.Timeout() {
