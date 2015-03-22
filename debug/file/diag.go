@@ -2,10 +2,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// +build diag
+// +build file
 
-package main
+package file
 
-var Diag = &Logger{}
+import "github.com/apptimistco/asn/debug"
 
-func init() { Diag.Init() }
+func init() {
+	FileDiag = debug.Diag
+}

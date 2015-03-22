@@ -7,11 +7,15 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
 
 	"github.com/agl/ed25519"
+	"github.com/apptimistco/asn/debug/accumulator"
 	"golang.org/x/crypto/nacl/box"
 	"gopkg.in/yaml.v1"
 )
@@ -25,6 +29,8 @@ const (
 	SharedSz    = 32
 	SignatureSz = ed25519.SignatureSize
 )
+
+var Mirrors = &PubEncr{} // empty key as flag for sending to mirrors
 
 type Nonce [NonceSz]byte
 type PubAuth [PubAuthSz]byte
@@ -94,60 +100,189 @@ func (k *ServiceKeys) Free() {
 	k.Nonce = nil
 }
 
+// FIXME do we need this copy?
+// copy(b[:], k[:])
 func (x *Nonce) Bytes() []byte {
-	// FIXME do we need this copy?
-	// copy(b[:], k[:])
 	return x[:]
 }
-
 func (x *PubAuth) Bytes() []byte {
 	return x[:]
 }
-
 func (x *PubEncr) Bytes() []byte {
 	return x[:]
 }
-
+func (x *PubEncrList) Bytes() []byte {
+	return []byte("FIXME")
+}
 func (x *SecAuth) Bytes() []byte {
 	return x[:]
 }
-
 func (x *SecEncr) Bytes() []byte {
 	return x[:]
 }
-
 func (x *Shared) Bytes() []byte {
 	return x[:]
 }
-
 func (x *Signature) Bytes() []byte {
 	return x[:]
 }
 
-func (x *PubEncr) Equal(other *PubEncr) bool {
-	return bytes.Equal(x[:], other[:])
+func (x *Nonce) FullString() string {
+	return hex.EncodeToString(x.Bytes())
+}
+func (x *PubAuth) FullString() string {
+	return hex.EncodeToString(x.Bytes())
+}
+func (x *PubEncr) FullString() string {
+	return hex.EncodeToString(x.Bytes())
+}
+func (x *SecAuth) FullString() string {
+	return hex.EncodeToString(x.Bytes())
+}
+func (x *SecEncr) FullString() string {
+	return hex.EncodeToString(x.Bytes())
+}
+func (x *Shared) FullString() string {
+	return hex.EncodeToString(x.Bytes())
+}
+func (x *Signature) FullString() string {
+	return hex.EncodeToString(x.Bytes())
 }
 
-func (x *Nonce) GetYAML() (string, interface{}) { return GetYAML(x) }
+func (x *Nonce) GetYAML() (string, interface{}) {
+	return "", x.FullString()
+}
+func (x *PubAuth) GetYAML() (string, interface{}) {
+	return "", x.FullString()
+}
+func (x *PubEncr) GetYAML() (string, interface{}) {
+	return "", x.FullString()
+}
+func (x *SecAuth) GetYAML() (string, interface{}) {
+	return "", x.FullString()
+}
+func (x *SecEncr) GetYAML() (string, interface{}) {
+	return "", x.FullString()
+}
 
-func (x *PubAuth) GetYAML() (string, interface{}) { return GetYAML(x) }
-func (x *PubEncr) GetYAML() (string, interface{}) { return GetYAML(x) }
-func (x *SecAuth) GetYAML() (string, interface{}) { return GetYAML(x) }
-func (x *SecEncr) GetYAML() (string, interface{}) { return GetYAML(x) }
+func (x *PubAuth) Has(v interface{}) bool {
+	if x == nil {
+		return false
+	}
+	switch t := v.(type) {
+	case PubAuth:
+		return bytes.Equal(x.Bytes(), t.Bytes())
+	case *PubAuth:
+		return bytes.Equal(x.Bytes(), t.Bytes())
+	}
+	return false
+}
 
-func (keys PubEncrList) Has(x *PubEncr) bool {
-	for _, k := range keys {
-		if k.Equal(x) {
-			return true
+func (x *PubEncr) Has(v interface{}) bool {
+	if x == nil {
+		return false
+	}
+	switch t := v.(type) {
+	case *PubEncr:
+		return bytes.Equal(x.Bytes(), t.Bytes())
+	case PubEncr:
+		return bytes.Equal(x.Bytes(), t.Bytes())
+	}
+	return false
+}
+
+func (x PubEncrList) Has(v interface{}) bool {
+	if x == nil {
+		return false
+	}
+	switch t := v.(type) {
+	case *PubEncr:
+		for _, k := range x {
+			if bytes.Equal(k.Bytes(), t.Bytes()) {
+				return true
+			}
+		}
+	case PubEncr:
+		for _, k := range x {
+			if bytes.Equal(k.Bytes(), t.Bytes()) {
+				return true
+			}
 		}
 	}
 	return false
 }
 
+func (l *PubEncrList) KeyAdd(k *PubEncr) {
+	for _, x := range *l {
+		if bytes.Equal(x.Bytes(), k.Bytes()) {
+			return
+		}
+	}
+	*l = append(*l, *k)
+}
+
+func (l *PubEncrList) KeyDel(k *PubEncr) {
+	for i, x := range *l {
+		if bytes.Equal(x.Bytes(), k.Bytes()) {
+			if i == 0 {
+				if len(*l) == 1 {
+					*l = []PubEncr(*l)[:0]
+				} else {
+					*l = []PubEncr(*l)[1:]
+				}
+			} else if i == len(*l) {
+				*l = []PubEncr(*l)[:i-1]
+			} else {
+				*l = append([]PubEncr(*l)[:i-1],
+					[]PubEncr(*l)[i+1:]...)
+			}
+			return
+		}
+	}
+}
+
+func (x *PubAuth) ReadFrom(r io.Reader) (int64, error) {
+	i, err := r.Read(x.Bytes())
+	return int64(i), err
+}
+
+func (x *PubEncr) ReadFrom(r io.Reader) (int64, error) {
+	i, err := r.Read(x.Bytes())
+	return int64(i), err
+}
+
+func (x *PubEncrList) ReadFrom(r io.Reader) (int64, error) {
+	if x == nil {
+		x = new(PubEncrList)
+	}
+	for {
+		var (
+			k PubEncr
+			n int64
+		)
+		i, err := r.Read(k.Bytes())
+		n += int64(i)
+		if err != nil {
+			if err == io.EOF {
+				err = nil
+			}
+			return n, err
+		}
+		*x = append(*x, k)
+	}
+}
+
+func (x *PubAuth) Reset()     { *x = PubAuth{} }
+func (x *PubEncr) Reset()     { *x = PubEncr{} }
+func (x *PubEncrList) Reset() { *x = PubEncrList{} }
+
 func (x *Nonce) Recast() *[NonceSz]byte { return (*[NonceSz]byte)(x) }
 
 func (x *PubAuth) Recast() *[PubAuthSz]byte { return (*[PubAuthSz]byte)(x) }
 func (x *PubEncr) Recast() *[PubEncrSz]byte { return (*[PubEncrSz]byte)(x) }
+
+func (x *PubEncrList) Recast() []PubEncr { return ([]PubEncr)(*x) }
+
 func (x *SecAuth) Recast() *[SecAuthSz]byte { return (*[SecAuthSz]byte)(x) }
 func (x *SecEncr) Recast() *[SecEncrSz]byte { return (*[SecEncrSz]byte)(x) }
 
@@ -157,24 +292,70 @@ func (x *Signature) Recast() *[SignatureSz]byte {
 	return (*[SignatureSz]byte)(x)
 }
 
+func (x *PubAuth) Set(v interface{}) error {
+	switch t := v.(type) {
+	case *PubAuth:
+		if x == nil {
+			panic(os.ErrInvalid)
+		}
+		*x = *t
+	case PubAuth:
+		*x = t
+	default:
+		return os.ErrInvalid
+	}
+	return nil
+}
+
+func (x *PubEncr) Set(v interface{}) error {
+	switch t := v.(type) {
+	case *PubEncr:
+		*x = *t
+	case PubEncr:
+		*x = t
+	default:
+		return os.ErrInvalid
+	}
+	return nil
+}
+
+func (x *PubEncrList) Set(v interface{}) error {
+	switch t := v.(type) {
+	case PubEncrList:
+		*x = t
+	default:
+		return os.ErrInvalid
+	}
+	return nil
+}
+
+func SetKeyYAML(x ByteSizer, t string, v interface{}) bool {
+	if s, ok := v.(string); ok && len(s) > 0 {
+		if err := DecodeFromString(x, s); err != nil {
+			return true
+		}
+	}
+	return false
+}
+
 func (x *Nonce) SetYAML(t string, v interface{}) bool {
-	return SetYAML(x, t, v)
+	return SetKeyYAML(x, t, v)
 }
 
 func (x *PubAuth) SetYAML(t string, v interface{}) bool {
-	return SetYAML(x, t, v)
+	return SetKeyYAML(x, t, v)
 }
 
 func (x *PubEncr) SetYAML(t string, v interface{}) bool {
-	return SetYAML(x, t, v)
+	return SetKeyYAML(x, t, v)
 }
 
 func (x *SecAuth) SetYAML(t string, v interface{}) bool {
-	return SetYAML(x, t, v)
+	return SetKeyYAML(x, t, v)
 }
 
 func (x *SecEncr) SetYAML(t string, v interface{}) bool {
-	return SetYAML(x, t, v)
+	return SetKeyYAML(x, t, v)
 }
 
 func (x *ServiceKeys) SetYAML(t string, v interface{}) (ret bool) {
@@ -204,12 +385,12 @@ func (x *ServiceKeys) SetYAML(t string, v interface{}) (ret bool) {
 		return
 	}
 	if t != "!!map" {
-		panic(Error{t, "neither string nor map:"})
+		panic(&Error{t, "neither string nor map:"})
 	}
 	for mk, mv := range v.(map[interface{}]interface{}) {
 		mks, ok := mk.(string)
 		if !ok {
-			panic(Error{"service keyword", "not a string"})
+			panic(errors.New("service keyword isn't a string"))
 		}
 		switch mks {
 		case "admin":
@@ -222,7 +403,7 @@ func (x *ServiceKeys) SetYAML(t string, v interface{}) (ret bool) {
 			mvs := mv.(string)
 			x.Nonce, _ = NewNonceString(mvs)
 		default:
-			panic(Error{mks, "invalid keyword"})
+			panic(&Error{mks, "invalid keyword"})
 		}
 	}
 	return
@@ -239,14 +420,6 @@ func (x *SecAuth) Size() int   { return len(*x) }
 func (x *SecEncr) Size() int   { return len(*x) }
 func (x *Shared) Size() int    { return len(*x) }
 func (x *Signature) Size() int { return len(*x) }
-
-func (x *Nonce) String() string     { return EncodeToString(x) }
-func (x *PubAuth) String() string   { return EncodeToString(x) }
-func (x *PubEncr) String() string   { return EncodeToString(x) }
-func (x *SecAuth) String() string   { return EncodeToString(x) }
-func (x *SecEncr) String() string   { return EncodeToString(x) }
-func (x *Shared) String() string    { return EncodeToString(x) }
-func (x *Signature) String() string { return EncodeToString(x) }
 
 /*
 String formats like this...
@@ -279,8 +452,64 @@ func (k *ServiceKeys) String() string {
 	return string(b)
 }
 
+func (x *Nonce) String() string     { return Ellipsis(x.ShortString()) }
+func (x *PubAuth) String() string   { return Ellipsis(x.ShortString()) }
+func (x *PubEncr) String() string   { return Ellipsis(x.ShortString()) }
+func (x *SecAuth) String() string   { return Ellipsis(x.ShortString()) }
+func (x *SecEncr) String() string   { return Ellipsis(x.ShortString()) }
+func (x *Shared) String() string    { return Ellipsis(x.ShortString()) }
+func (x *Signature) String() string { return Ellipsis(x.ShortString()) }
+
+func (x *PubEncrList) String() string {
+	b := new(bytes.Buffer)
+	for i, k := range *x {
+		if i > 0 {
+			fmt.Fprint(b, "\n")
+		}
+		fmt.Fprint(b, &k)
+	}
+	return b.String()
+}
+
+func (x *Nonce) ShortString() string     { return x.FullString()[:8] }
+func (x *PubAuth) ShortString() string   { return x.FullString()[:8] }
+func (x *PubEncr) ShortString() string   { return x.FullString()[:8] }
+func (x *SecAuth) ShortString() string   { return x.FullString()[:8] }
+func (x *SecEncr) ShortString() string   { return x.FullString()[:8] }
+func (x *Shared) ShortString() string    { return x.FullString()[:8] }
+func (x *Signature) ShortString() string { return x.FullString()[:8] }
+
 func (sig *Signature) Verify(k *PubAuth, message []byte) bool {
 	return ed25519.Verify(k.Recast(), message, sig.Recast())
+}
+
+func (k *PubAuth) WriteTo(w io.Writer) (int64, error) {
+	n, err := w.Write(k.Bytes())
+	return int64(n), err
+}
+
+func (k *PubEncr) WriteTo(w io.Writer) (int64, error) {
+	n, err := w.Write(k.Bytes())
+	return int64(n), err
+}
+
+func (l *PubEncrList) WriteTo(w io.Writer) (n int64, err error) {
+	var a accumulator.Int64
+	defer func() {
+		if r := recover(); r != nil {
+			err, _ = r.(error)
+		}
+		n = int64(a)
+	}()
+	for _, k := range *l {
+		a.Accumulate(w.Write(k.Bytes()))
+	}
+	return
+}
+
+func (sig *Signature) WriteTo(w io.Writer) (int64, error) {
+	n, err := w.Write(sig.Bytes())
+	return int64(n), err
 }
 
 func NewNonceString(s string) (x *Nonce, err error) {
@@ -301,6 +530,12 @@ func NewPubEncr(v interface{}) (pub *PubEncr, err error) {
 	return
 }
 
+func NewPubEncrReader(r io.Reader) (x *PubEncr, err error) {
+	x = new(PubEncr)
+	_, err = r.Read(x[:])
+	return
+}
+
 func NewPubAuthString(s string) (x *PubAuth, err error) {
 	x = new(PubAuth)
 	err = DecodeFromString(x, s)
@@ -313,22 +548,16 @@ func NewPubEncrString(s string) (x *PubEncr, err error) {
 	return
 }
 
-func NewPubEncrReader(r io.Reader) (x *PubEncr, err error) {
-	x = new(PubEncr)
-	_, err = r.Read(x[:])
-	return
-}
-
 func NewPubKeysMap(m map[interface{}]interface{}) *PubKeys {
 	pub := new(PubKeys)
 	for mk, mv := range m {
 		mks, ok := mk.(string)
 		if !ok {
-			panic(Error{"pub key", "keyword not a string"})
+			panic(errors.New("pub key keyword isn't a string"))
 		}
 		mvs, ok := mv.(string)
 		if !ok {
-			panic(Error{mks, "value not a string"})
+			panic(&Error{mks, "value not a string"})
 		}
 		var err error
 		switch mks {
@@ -337,10 +566,10 @@ func NewPubKeysMap(m map[interface{}]interface{}) *PubKeys {
 		case "encr":
 			pub.Encr, err = NewPubEncrString(mvs)
 		default:
-			panic(Error{mks, "invalid keyword"})
+			panic(&Error{mks, "invalid keyword"})
 		}
 		if err != nil {
-			panic(Error{mks, err.Error()})
+			panic(&Error{mks, err.Error()})
 		}
 	}
 	return pub
@@ -412,11 +641,11 @@ func NewSecKeysMap(m map[interface{}]interface{}) *SecKeys {
 	for mk, mv := range m {
 		mks, ok := mk.(string)
 		if !ok {
-			panic(Error{"sec key", "keyword not a string"})
+			panic(errors.New("sec key keyword isn't a string"))
 		}
 		mvs, ok := mv.(string)
 		if !ok {
-			panic(Error{mks, "value not a string"})
+			panic(&Error{mks, "value not a string"})
 		}
 		var err error
 		switch mks {
@@ -425,10 +654,10 @@ func NewSecKeysMap(m map[interface{}]interface{}) *SecKeys {
 		case "encr":
 			sec.Encr, err = NewSecEncrString(mvs)
 		default:
-			panic(Error{mks, "invalid keyword"})
+			panic(&Error{mks, "invalid keyword"})
 		}
 		if err != nil {
-			panic(Error{mks, err.Error()})
+			panic(&Error{mks, err.Error()})
 		}
 	}
 	return sec
@@ -451,24 +680,39 @@ func NewUserKeysMap(m map[interface{}]interface{}) *UserKeys {
 	for mk, mv := range m {
 		mks, ok := mk.(string)
 		if !ok {
-			panic(Error{"user key", "keyword not a string"})
+			panic(errors.New("user key's keyword not a string"))
 		}
 		switch mks {
 		case "pub":
 			xm, ok := mv.(map[interface{}]interface{})
 			if !ok {
-				panic(Error{mks, "not a map"})
+				panic(&Error{mks, "not a map"})
 			}
 			u.Pub = NewPubKeysMap(xm)
 		case "sec":
 			xm, ok := mv.(map[interface{}]interface{})
 			if !ok {
-				panic(Error{mks, "not a map"})
+				panic(&Error{mks, "not a map"})
 			}
 			u.Sec = NewSecKeysMap(xm)
 		default:
-			panic(Error{mks, "invalid keyword"})
+			panic(&Error{mks, "invalid keyword"})
 		}
 	}
 	return u
+}
+
+func DecodeFromString(x ByteSizer, s string) error {
+	if x == nil {
+		return errors.New("destination is nil")
+	}
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		return err
+	}
+	if len(b) != x.Size() {
+		return os.ErrInvalid
+	}
+	copy(x.Bytes()[:], b[:])
+	return nil
 }

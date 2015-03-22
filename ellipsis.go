@@ -2,10 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// +build !nolog
-
 package main
 
-var Log = &Logger{}
-
-func init() { Log.Init() }
+func Ellipsis(s string) string {
+	return s + "..."
+}

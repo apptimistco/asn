@@ -6,32 +6,43 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
-	"sync"
+
+	"github.com/apptimistco/asn/debug"
+	"github.com/apptimistco/asn/debug/file"
+	"github.com/apptimistco/asn/debug/mutex"
 )
 
 const PDUBufSz = 4096
 
 var (
-	pduPool    chan *PDU
-	pduBufPool chan *pduBuf
-	pduMutex   = &sync.Mutex{}
+	pdus struct {
+		mutex.Mutex
+		pool   chan *PDU
+		bufs   chan *PB
+		debug  func(int, *PDU, string)
+		newPDU func() *PDU
+	}
+
+	PduDiag *debug.Logger
 
 	ErrPDUInvalid = errors.New("invalid PDU (neither File nor Buffer)")
 	ErrPDUOverrun = errors.New("overrun PDU Buffer")
 )
 
 func init() {
-	pduPool = make(chan *PDU, 16)
-	pduBufPool = make(chan *pduBuf, 16)
+	pdus.pool = make(chan *PDU, 16)
+	pdus.bufs = make(chan *PB, 16)
+	pdus.Mutex.Set("pdu")
 }
 
 func FlushPDU() {
 	for {
 		select {
-		case <-pduBufPool:
-		case <-pduPool:
+		case <-pdus.bufs:
+		case <-pdus.pool:
 		default:
 			return
 		}
@@ -39,41 +50,51 @@ func FlushPDU() {
 }
 
 type PDU struct {
-	File  *os.File
+	File  *file.File
 	FN    string
-	PB    *pduBuf
+	PB    *PB
 	Limit int64
 	ref   int
 }
 
-func newPDU() (pdu *PDU) {
+func NewPDU() (pdu *PDU) {
 	select {
-	case t := <-pduPool:
+	case t := <-pdus.pool:
 		pdu = t
+		pdu.Diag(debug.Depth(3), "recycled")
 	default:
 		pdu = new(PDU)
+		pdu.Diag(debug.Depth(3), "new")
 	}
 	pdu.ref = 1
-	// Diag.Output(3, fmt.Sprintf("new pdu %p\n", pdu))
 	return
 }
 
 func NewPDUBuf() (pdu *PDU) {
-	pdu = newPDU()
-	pdu.PB = newPDUBuf()
+	pdu = NewPDU()
+	select {
+	case t := <-pdus.bufs:
+		pdu.PB = t
+		pdu.Diag(debug.Depth(2), pdu.PB.DiagString("recycled"))
+	default:
+		pdu.PB = new(PB)
+		pdu.Diag(debug.Depth(2), pdu.PB.DiagString("new"))
+	}
 	return
 }
 
-func NewPDUFile(file *os.File) (pdu *PDU) {
-	pdu = newPDU()
+func NewPDUFile(file *file.File) (pdu *PDU) {
+	pdu = NewPDU()
 	pdu.File = file
 	pdu.FN = file.Name()
+	pdu.Diag(debug.Depth(2), "file", pdu.FN, "recast")
 	return
 }
 
 func NewPDUFN(fn string) (pdu *PDU) {
-	pdu = newPDU()
+	pdu = NewPDU()
 	pdu.FN = fn
+	pdu.Diag(debug.Depth(2), "file", pdu.FN, "new")
 	return
 }
 
@@ -86,8 +107,8 @@ func (pdu *PDU) Close() (err error) {
 }
 
 func (pdu *PDU) Clone() {
-	pduMutex.Lock()
-	defer pduMutex.Unlock()
+	pdus.Lock()
+	defer pdus.Unlock()
 	pdu.ref += 1
 }
 
@@ -122,10 +143,20 @@ func (pdu *PDU) copier(r io.Reader, w io.Writer) (n int64, err error) {
 }
 
 func (pdu *PDU) deref() int {
-	pduMutex.Lock()
-	defer pduMutex.Unlock()
+	pdus.Lock()
+	defer pdus.Unlock()
 	pdu.ref -= 1
 	return pdu.ref
+}
+
+// If built with "diag" and "pdu" tags, Diag sends Sprintln(v...) output
+// to the Diag logger.
+func (pdu *PDU) Diag(v ...interface{}) {
+	if PduDiag == nil {
+		return
+	}
+	depth, v := debug.FilterDepth(v...)
+	PduDiag.Output(depth, fmt.Sprintf("pdu %p %s", pdu, fmt.Sprintln(v...)))
 }
 
 // Error returns the unread portion of the pdu as an error.
@@ -140,29 +171,31 @@ func (pdu *PDU) Error() error {
 
 func (pdu *PDU) Free() {
 	if pdu == nil {
-		Diag.Output(2, "free nil pdu")
+		pdus.Diag(debug.Depth(2), "nil")
 		return
 	}
 	if pdu.deref() > 0 {
 		return
 	}
-	// Diag.Output(2, fmt.Sprintf("free pdu %p\n", pdu))
 	if pdu.File != nil {
 		pdu.File.Close()
 		pdu.File = nil
 	}
 	if pdu.FN != "" {
-		if reposIsTmpFN(pdu.FN) {
+		if IsTmp(pdu.FN) || IsBridge(pdu.FN) {
 			os.Remove(pdu.FN)
+			pdu.Diag(debug.Depth(2), "file", pdu.FN, "removed")
 		}
 		pdu.FN = ""
 	}
 	if pdu.PB != nil {
+		pdu.Diag(debug.Depth(2), pdu.PB.DiagString("free"))
 		pdu.PB.Free()
 		pdu.PB = nil
 	}
+	pdu.Diag(debug.Depth(2), "free")
 	select {
-	case pduPool <- pdu:
+	case pdus.pool <- pdu:
 	}
 }
 
@@ -185,7 +218,7 @@ func (pdu *PDU) Open() (err error) {
 	} else if pdu.File != nil {
 		_, err = pdu.File.Seek(0, os.SEEK_SET)
 	} else {
-		pdu.File, err = os.Open(pdu.FN)
+		pdu.File, err = file.Open(pdu.FN)
 	}
 	return
 }
@@ -199,7 +232,7 @@ func (pdu *PDU) Read(b []byte) (int, error) {
 	} else if pdu.PB != nil {
 		return pdu.PB.Read(b)
 	}
-	Diag.Println(pdu.FN, ErrPDUInvalid)
+	pdus.Diag(pdu.FN, ErrPDUInvalid)
 	return 0, ErrPDUInvalid
 }
 
@@ -220,7 +253,7 @@ func (pdu *PDU) ReadFrom(r io.Reader) (int64, error) {
 		}
 		return int64(i), err
 	}
-	Diag.Println(pdu.FN, ErrPDUInvalid)
+	pdus.Diag(pdu.FN, ErrPDUInvalid)
 	return 0, ErrPDUInvalid
 }
 
@@ -280,7 +313,7 @@ func (pdu *PDU) Write(b []byte) (int, error) {
 	} else if pdu.PB != nil {
 		return pdu.PB.Write(b)
 	}
-	Diag.Println(pdu.FN, ErrPDUInvalid)
+	pdus.Diag(ErrPDUInvalid)
 	return 0, ErrPDUInvalid
 }
 
@@ -299,42 +332,41 @@ func (pdu *PDU) WriteTo(w io.Writer) (int64, error) {
 		pdu.PB.ro += i
 		return int64(i), err
 	}
-	Diag.Println(pdu.FN, ErrPDUInvalid)
+	pdus.Diag(pdu.FN, ErrPDUInvalid)
 	return 0, ErrPDUInvalid
 }
 
-type pduBuf struct {
+type PB struct {
 	buf    [PDUBufSz]byte
 	ro, wo int
 }
 
-func newPDUBuf() (pb *pduBuf) {
-	select {
-	case t := <-pduBufPool:
-		pb = t
-	default:
-		pb = new(pduBuf)
-	}
-	return
-}
-
-func (pb *pduBuf) Bytes() []byte {
+func (pb *PB) Bytes() []byte {
 	return pb.buf[pb.ro:pb.wo]
 }
 
-func (pb *pduBuf) Free() {
+// If built with "diag" and "pdu" tags, DiagString returns Sprint(v...)
+// output prefaced by "buf %p"
+// to the Diag logger.
+func (pb *PB) DiagString(v ...interface{}) string {
+	if PduDiag == nil {
+		return ""
+	}
+	return fmt.Sprintf("buf %p %s", pb, fmt.Sprint(v...))
+}
+
+func (pb *PB) Free() {
 	if pb == nil {
 		return
 	}
 	pb.ro = 0
 	pb.wo = 0
 	select {
-	case pduBufPool <- pb:
+	case pdus.bufs <- pb:
 	}
-	pb = nil
 }
 
-func (pb *pduBuf) Read(b []byte) (int, error) {
+func (pb *PB) Read(b []byte) (int, error) {
 	if pb.ro >= pb.wo {
 		if len(b) == 0 {
 			return 0, nil
@@ -350,7 +382,7 @@ func (pb *pduBuf) Read(b []byte) (int, error) {
 	return n, nil
 }
 
-func (pb *pduBuf) Write(b []byte) (int, error) {
+func (pb *PB) Write(b []byte) (int, error) {
 	end := pb.wo + len(b)
 	if end >= PDUBufSz {
 		return 0, ErrPDUOverrun

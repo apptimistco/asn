@@ -5,70 +5,74 @@
 package main
 
 import (
-	"bytes"
 	"errors"
 	"io"
 	"os"
-	"sync"
 	"time"
+
+	"github.com/apptimistco/asn/debug"
+	"github.com/apptimistco/asn/debug/mutex"
 )
 
 // AckerF is an Acknowledgment handler for the given request and trailing Ack
 // data.
-type AckerF func(Requester, *PDU) error
+type AckerF func(Req, error, *PDU) error
 
 type acker struct {
-	mutex *sync.Mutex
-	fmap  map[Requester]AckerF
+	mutex.Mutex
+	m map[Req]AckerF
 }
 
-// Init an ASN callback map
 func (acker *acker) Init() {
-	acker.mutex = new(sync.Mutex)
-	acker.fmap = make(map[Requester]AckerF)
+	acker.Mutex.Set("acker")
+	if acker.m == nil {
+		acker.m = make(map[Req]AckerF)
+	}
 }
 
-// Free the ASN callback map
-func (acker *acker) Free() {
-	for k, _ := range acker.fmap {
-		acker.fmap[k] = nil
+func (acker *acker) Reset() {
+	for k, _ := range acker.m {
+		acker.m[k] = nil
 	}
-	acker.fmap = nil
-	acker.mutex = nil
 }
 
 // Map a handler to the given request.
-func (acker *acker) Map(req Requester, f AckerF) {
-	acker.mutex.Lock()
-	defer acker.mutex.Unlock()
-	acker.fmap[req] = f
+func (acker *acker) Map(req Req, f AckerF) {
+	acker.Lock()
+	defer acker.Unlock()
+	acker.m[req] = f
 }
 
 // UnMap a handler to the given request.
-func (acker *acker) UnMap(req Requester) {
-	acker.mutex.Lock()
-	defer acker.mutex.Unlock()
-	acker.fmap[req] = nil
+func (acker *acker) UnMap(req Req) {
+	acker.Lock()
+	defer acker.Unlock()
+	acker.m[req] = nil
 }
 
 // Rx processes recieved acks with registered handlers.
-func (asn *ASN) AckerRx(pdu *PDU) (err error) {
-	var req Requester
+func (asn *asn) AckerRx(pdu *PDU) (err error) {
+	var req Req
 	if _, err = req.ReadFrom(pdu); err != nil {
 		return
 	}
-	if _, err = (NBOReader{pdu}).ReadNBO(&asn.Time.In); err != nil {
+	if _, err = (NBOReader{pdu}).ReadNBO(&asn.time.in); err != nil {
 		return
 	}
-	asn.Trace("rx", AckReqId, req)
-	asn.Acker.mutex.Lock()
-	f := asn.Acker.fmap[req]
-	asn.Acker.mutex.Unlock()
-	if f == nil {
+	if err = asn.ParseAckError(pdu); err == nil {
+		asn.Trace(debug.Id(AckReqId), "rx", req, "ack")
+	} else {
+		asn.Trace(debug.Id(AckReqId), "rx", req, "nack", err)
+	}
+	asn.acker.Lock()
+	f, ok := asn.acker.m[req]
+	asn.acker.Unlock()
+	if ok && f != nil {
+		err = f(req, err, pdu)
+	} else {
 		pdu.Free()
 		err = errors.New("unregistered Ack request")
-	} else {
-		err = f(req, pdu)
+		asn.Diag(err)
 	}
 	return
 }
@@ -78,7 +82,7 @@ func (asn *ASN) AckerRx(pdu *PDU) (err error) {
 // successful Ack with any subsequent args appended as data.
 // Only use this for page sized acks, anything larger should use
 // NewAckSuccessPDUFile
-func (asn *ASN) Ack(req Requester, argv ...interface{}) {
+func (asn *asn) Ack(req Req, argv ...interface{}) {
 	var err error
 	if len(argv) == 1 {
 		switch t := argv[0].(type) {
@@ -97,10 +101,9 @@ func (asn *ASN) Ack(req Requester, argv ...interface{}) {
 	v.WriteTo(ack)
 	AckReqId.Version(v).WriteTo(ack)
 	req.WriteTo(ack)
-	(NBOWriter{ack}).WriteNBO(asn.Time.Out)
+	(NBOWriter{ack}).WriteNBO(asn.time.out)
 	if err != nil {
-		asn.Trace("tx", AckReqId, req, err)
-		Diag.Output(2, asn.Name.Session+" nack"+err.Error())
+		asn.Trace(debug.Id(AckReqId), "tx", req, "nack", err)
 		ErrFromError(err).Version(v).WriteTo(ack)
 		if len(argv) > 0 {
 			AckOut(ack, argv...)
@@ -108,8 +111,7 @@ func (asn *ASN) Ack(req Requester, argv ...interface{}) {
 			ack.Write([]byte(err.Error()))
 		}
 	} else {
-		asn.Trace("tx", AckReqId, req, Success)
-		Diag.Output(2, asn.Name.Session+" ack")
+		asn.Trace(debug.Id(AckReqId), "tx", req, "ack")
 		Success.Version(v).WriteTo(ack)
 		AckOut(ack, argv...)
 	}
@@ -126,7 +128,7 @@ func AckOut(w io.Writer, argv ...interface{}) {
 				var (
 					v   Version
 					id  Id
-					req Requester
+					req Req
 					rxt time.Time
 					ec  Err
 				)
@@ -141,12 +143,14 @@ func AckOut(w io.Writer, argv ...interface{}) {
 				t.WriteTo(w)
 			}
 			t.Free()
-		case *bytes.Buffer:
+		case WriteToer:
 			t.WriteTo(w)
+		case io.Reader:
+			io.Copy(w, t)
 		case []byte:
 			w.Write(t)
 		case string:
-			w.Write([]byte(t))
+			io.WriteString(w, t)
 		case func(io.Writer):
 			t(w)
 		case []*os.File:
@@ -164,25 +168,22 @@ func AckOut(w io.Writer, argv ...interface{}) {
 
 // NewAckSuccessPDUFile creates a temp file preloaded with the asn success ack
 // header and ready to write success data.
-func (asn *ASN) NewAckSuccessPDUFile(req Requester) (ack *PDU, err error) {
-	f, err := asn.Repos.Tmp.NewFile()
-	if err != nil {
-		return
-	}
+func (asn *asn) NewAckSuccessPDUFile(req Req) (ack *PDU, err error) {
+	f := asn.repos.tmp.New()
 	ack = NewPDUFile(f)
 	f = nil
 	v := asn.version
 	v.WriteTo(ack)
 	AckReqId.Version(v).WriteTo(ack)
 	req.WriteTo(ack)
-	(NBOWriter{ack}).WriteNBO(asn.Time.Out)
+	(NBOWriter{ack}).WriteNBO(asn.time.out)
 	Success.Version(v).WriteTo(ack)
 	return
 }
 
 // ParseAckError returns a GO error, if any, derrived from the Ack and
 // returns nil if Ack indicates success.
-func (asn *ASN) ParseAckError(ack *PDU) (err error) {
+func (asn *asn) ParseAckError(ack *PDU) (err error) {
 	var e Err
 	e.ReadFrom(ack)
 	e.Internal(asn.Version())

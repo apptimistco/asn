@@ -5,7 +5,6 @@
 package main
 
 import (
-	"bytes"
 	"flag"
 	"fmt"
 	"io"
@@ -15,9 +14,10 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/apptimistco/asn/debug"
 )
 
-type Buffer struct{ bytes.Buffer }
 type AsnTest struct {
 	mode Mode
 	fn   string
@@ -30,6 +30,7 @@ type AsnTestMap map[string]*AsnTest
 
 var (
 	atf struct {
+		debug.Debug
 		clean bool
 		trace string
 	}
@@ -56,42 +57,37 @@ func init() {
 		atf.trace = "trace flush\n"
 	}
 	for _, x := range atm {
-		x.cmd.In = &x.in
-		x.cmd.Out = &x.out
+		x.cmd.Stdin = &x.in
+		x.cmd.Stdout = &x.out
+		x.cmd.Stderr = NopCloserWriter(os.Stderr)
 		x.cmd.Sig = make(Sig, 1)
 		x.cmd.Done = make(Done, 1)
 		signal.Notify(x.cmd.Sig, syscall.SIGINT, syscall.SIGTERM)
 	}
 }
 
-func AsnTestConfig(t *testing.T) {
-	for _, err := range []error{
-		Diag.Create("test.diag"),
-		Log.Create("test.log"),
-	} {
-		if err != nil {
-			t.Fatal(err)
-		}
+func TestAsn(t *testing.T) {
+	atf.Debug.Set("asn_test")
+	f, err := debug.Create("test.log")
+	if err != nil {
+		t.Fatal(err)
 	}
+	defer f.Close()
+	debug.Redirect(f)
+	atf.Log("pid:", os.Getpid())
 	for _, x := range atm {
 		if atf.clean {
 			repos := x.fn + ReposExt
-			Diag.Println("rm -r", repos)
+			atf.Log("rm -r", repos)
 			os.RemoveAll(repos)
 		}
 		if err := x.cmd.Cfg.Parse(x.fn); err != nil {
 			t.Fatal(err)
 		}
 	}
-}
-
-func TestAsn(t *testing.T) {
-	AsnTestConfig(t)
-	Log.Println("pid:", os.Getpid())
 	admin := atm["admin"]
 	sf := atm["sf"]
-	err := atm.CheckConfigs()
-	if err != nil {
+	if err = atm.CheckConfigs(); err != nil {
 		t.Fatal(err)
 	}
 	err = sf.Test("SF help", "", "Commands:", "help")
@@ -105,13 +101,13 @@ func TestAsn(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	admin.cmd.Flag.Nologin = true
+	admin.cmd.Flag.NoLogin = true
 	err = admin.Test("no-login echo", "", "hello world",
 		"echo", "hello", "world")
 	if err != nil {
 		t.Fatal(err)
 	}
-	admin.cmd.Flag.Nologin = false
+	admin.cmd.Flag.NoLogin = false
 	err = admin.Test("echo", "", "hello world",
 		"echo", "hello", "world")
 	if err != nil {
@@ -138,7 +134,7 @@ echo hello world
 	}
 	err = admin.Test("trace", `
 trace flush
-`, "test-sf.unnamed. tx AckReq.*", "-")
+`, `.*`, "-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,14 +177,12 @@ blob asn/messages/ its me
 	}
 }
 
-func (b *Buffer) Close() error { return nil }
-
 // Test runs the receiver Admin or Server with given input and args then
 // compares the output to the given patter.
 func (x *AsnTest) Test(desc, in, pat string, args ...string) (err error) {
 	if testing.Verbose() {
 		fmt.Print(desc, "...")
-		Diag.Println(desc, "...")
+		atf.Log(desc, "...")
 	}
 	x.out.Reset()
 	x.in.Reset()
@@ -207,8 +201,7 @@ func (x *AsnTest) Test(desc, in, pat string, args ...string) (err error) {
 		got := x.out.String()
 		t, err = regexp.MatchReader(pat, &x.out)
 		if err == nil && !t {
-			Diag.Print("expected: ", pat, "\ngot:\n",
-				got, "\n")
+			atf.Diag("expected: ", pat, "\ngot:\n", got, "\n")
 			err = &Error{desc, "mis-matched output"}
 		}
 	}
@@ -235,7 +228,7 @@ func (m AsnTestMap) CheckConfigs() error {
 func (m AsnTestMap) StartServers() {
 	for k, x := range m {
 		if x.mode.Server() {
-			Diag.Println("starting", k, "...")
+			atf.Log("starting", k, "...")
 			go x.cmd.Server()
 		}
 	}
@@ -244,10 +237,10 @@ func (m AsnTestMap) StartServers() {
 func (m AsnTestMap) StopServers() (err error) {
 	for k, x := range m {
 		if x.mode.Server() {
-			Diag.Println("stopping ", k, " ...")
+			atf.Log("stopping ", k, " ...")
 			x.cmd.Sig <- os.Interrupt
 			if xerr := x.cmd.Wait(); xerr != nil {
-				Diag.Println(k, "stopped with", xerr)
+				atf.Diag(k, "stopped with", xerr)
 				if err == nil {
 					err = xerr
 				}

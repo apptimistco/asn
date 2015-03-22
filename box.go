@@ -8,19 +8,12 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"os"
 
 	"golang.org/x/crypto/nacl/box"
 )
 
-const (
-	BoxOverhead = box.Overhead
-)
-
-var (
-	ErrNonce = errors.New("invalid nonce")
-	ErrSeal  = errors.New("can't seal box")
-	ErrOpen  = errors.New("can't open box")
-)
+const BoxOverhead = box.Overhead
 
 // New() creates a Box of given sequence length, nonce, peer and the subject
 // encryption key pair.
@@ -80,7 +73,7 @@ func (x *Box) Open(out, in []byte) ([]byte, error) {
 		x.OpenNonce.Recast(), x.Key.Recast())
 	if !ok {
 		black = black[:0]
-		return black, ErrOpen
+		return black, errors.New("can't open box")
 	}
 	x.OpenNonce.Inc(x.SeqLen)
 	return black, nil
@@ -91,7 +84,7 @@ func (x *Box) Seal(out, in []byte) ([]byte, error) {
 	red := box.SealAfterPrecomputation(out, in,
 		x.SealNonce.Recast(), x.Key.Recast())
 	if len(red) == 0 {
-		return red, ErrSeal
+		return red, errors.New("can't seal box")
 	}
 	x.SealNonce.Inc(x.SeqLen)
 	return red, nil
@@ -114,7 +107,7 @@ func Noncer(v interface{}) (*Nonce, error) {
 	case string:
 		return NewNonceString(t)
 	}
-	return nil, ErrNonce
+	return nil, os.ErrInvalid
 }
 
 // Inc[rement] the Box Nounce by two.

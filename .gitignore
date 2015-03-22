@@ -7,8 +7,7 @@ asn
 asn-static
 asn.test
 asn.pprof
-/*.diag
-/*.log
-/*.yaml
-/*.asn
-/*.sock
+*.log
+*.yaml
+*.asn
+*.sock
