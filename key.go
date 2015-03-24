@@ -254,6 +254,8 @@ func (x *PubEncr) ReadFrom(r io.Reader) (int64, error) {
 func (x *PubEncrList) ReadFrom(r io.Reader) (int64, error) {
 	if x == nil {
 		x = new(PubEncrList)
+	} else {
+		*x = (*x)[:0]
 	}
 	for {
 		var (
