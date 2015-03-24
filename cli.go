@@ -15,7 +15,7 @@ import (
 	"runtime"
 	"syscall"
 
-	"github.com/tgrennan/go-gnureadline"
+	"github.com/rocky/go-gnureadline"
 )
 
 func (adm *Adm) CLI() (err error) {
