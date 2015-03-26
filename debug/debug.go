@@ -206,7 +206,7 @@ func (x *Debug) String() string {
 
 // Trace adds Println(v...) output to the circular ring.
 func (x *Debug) Trace(v ...interface{}) {
-	if Trace == nil {
+	if Diag == nil || Trace == nil {
 		return
 	}
 	if id, isId := v[0].(Id); isId {
