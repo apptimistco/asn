@@ -42,6 +42,10 @@ server:
   url: tcp://localhost:6022
   lat: 34.05
   lon: -118.25
+- name: gcloud.ws
+  url: ws://104.154.35.240:8080/asn/test.ws
+  lat: 37.7833
+  lon: -122.4167
 keys: test-keys
 `),
 	`test-sf`: []byte(`
@@ -58,6 +62,13 @@ lon: -118.25
 listen:
 - unix:///test-la.sock
 - tcp://:6022
+keys: test-keys
+`),
+	`test-gcloud`: []byte(`
+lat: 37.7833
+lon: -122.4167
+listen:
+- ws://:8080/asn/test.ws
 keys: test-keys
 `),
 }
