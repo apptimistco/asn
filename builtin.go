@@ -43,7 +43,7 @@ server:
   lat: 34.05
   lon: -118.25
 - name: gcloud.ws
-  url: ws://104.154.35.240:8080/asn/test.ws
+  url: ws://104.154.68.215:8080/asn/test.ws
   lat: 37.7833
   lon: -122.4167
 keys: test-keys
