@@ -125,25 +125,23 @@ func (c *Config) Parse(fn string) (err error) {
 	return nil
 }
 
-// retrieve Server Index of named, url or numbered server.
-func (c *Config) SI(s string) (i int, err error) {
+// ServerURL returns indexed or named server; or parsed url.
+func (c *Config) ServerURL(s string) (*URL, error) {
 	if s == "" {
-		return
+		return c.Server[0].Url, nil
 	}
-	if i, err = strconv.Atoi(s); err == nil {
+	if i, err := strconv.Atoi(s); err == nil {
 		if i < 0 || i >= len(c.Server) {
-			err = &Error{s, strconv.ErrRange.Error()}
+			return nil, &Error{s, strconv.ErrRange.Error()}
 		}
-		return
+		return c.Server[i].Url, nil
 	}
-	for x, se := range c.Server {
+	for i, se := range c.Server {
 		if s == se.Name || s == se.Url.String() {
-			i, err = x, nil
-			return
+			return c.Server[i].Url, nil
 		}
 	}
-	err = &Error{s, "no such server"}
-	return
+	return NewURL(s)
 }
 
 // String marshals the Config.

@@ -336,6 +336,9 @@ func (srv *Server) Listen() error {
 			go l.listen(srv)
 		case "ws":
 			l.ws = true
+			if lurl.Host == "" {
+				lurl.Host = ":http"
+			}
 			addr, err := net.ResolveTCPAddr("tcp", lurl.Host)
 			if err != nil {
 				return err
@@ -364,7 +367,7 @@ func (srv *Server) Listen() error {
 			*/
 			mux := http.NewServeMux()
 			mux.Handle(lurl.Path, websocket.Handler(f))
-			srv.Diag("listening on", addr)
+			srv.Diag("listening on", lurl.String())
 			go http.Serve(l.ln, mux)
 		default:
 			err := &Error{lurl.Scheme, "unsupported"}

@@ -44,7 +44,7 @@ func (cmd *Command) Admin(args ...string) {
 	if err != nil {
 		runtime.Goexit()
 	}
-	si, err := cmd.Cfg.SI(cmd.Flag.Server)
+	url, err := cmd.Cfg.ServerURL(cmd.Flag.Server)
 	if err != nil {
 		runtime.Goexit()
 	}
@@ -55,7 +55,7 @@ func (cmd *Command) Admin(args ...string) {
 	defer func() { adm.repos.Reset() }()
 	adm.asn.Init()
 	adm.asn.Set(&adm.repos)
-	if err = adm.Connect(si); err != nil {
+	if err = adm.Connect(url); err != nil {
 		runtime.Goexit()
 	}
 	adm.done.handler = make(Done, 1)
@@ -134,11 +134,11 @@ func (adm *Adm) cmdLine(line string) (err error) {
 	return
 }
 
-// Connect to the si'th server listed in the configuration.
-func (adm *Adm) Connect(si int) (err error) {
+// Connect to the given server.
+func (adm *Adm) Connect(url *URL) (err error) {
 	var conn net.Conn
 	for t := 100 * time.Millisecond; true; t *= 2 {
-		conn, err = adm.Dial(adm.cmd.Cfg.Server[si].Url)
+		conn, err = adm.Dial(url)
 		if conn != nil && err == nil {
 			break
 		}
@@ -153,7 +153,7 @@ func (adm *Adm) Connect(si int) (err error) {
 	adm.ephemeral.pub, adm.ephemeral.sec, _ = NewRandomEncrKeys()
 	conn.Write(adm.ephemeral.pub[:])
 	adm.asn.name.local = adm.cmd.Cfg.Name
-	adm.asn.Set(adm.cmd.Cfg.Server[si].Name)
+	adm.asn.Set(url.String())
 	adm.asn.Set(NewBox(2,
 		adm.cmd.Cfg.Keys.Nonce,
 		adm.cmd.Cfg.Keys.Server.Pub.Encr,
@@ -184,6 +184,9 @@ func (adm *Adm) Dial(durl *URL) (net.Conn, error) {
 	case "ws":
 		turl := durl.String()
 		adm.Diag("dialing", turl)
+		if durl.Host == "" {
+			durl.Host = "localhost:http"
+		}
 		nc, err := net.Dial("tcp", durl.Host)
 		if err != nil {
 			adm.Diag(err)

@@ -8,6 +8,14 @@ import "net/url"
 
 type URL url.URL
 
+func NewURL(s string) (*URL, error) {
+	p, err := url.Parse(s)
+	if err != nil {
+		return nil, err
+	}
+	return (*URL)(p), nil
+}
+
 func (u *URL) GetYAML() (string, interface{}) {
 	return "", u.String()
 }
