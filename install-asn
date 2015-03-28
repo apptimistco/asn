@@ -5,15 +5,12 @@
 [ "$ASN" = "" ] && ASN=asn-static
 [ "$CHRDIR" = "" ] && CHRDIR=/var/chroot/asn
 
-if [ -x $ASN ] ; then
-	echo missing $ASN >/dev/stderr
-	exit 2
-fi
-
-if [ -x $CHRDIR ] ; then
-	echo missing $CHRDIR >/dev/stderr
-	exit 2
-fi
+for x in $ASN $CHRDIR; do
+	if [ ! -x $x ] ; then
+		echo missing $x >/dev/stderr
+		exit 2
+	fi
+done
 
 install -D $ASN $CHRDIR/usr/sbin/asn || exit $?
 install -D start-stop-asn /etc/init.d/asn || exit $?
