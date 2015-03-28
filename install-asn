@@ -1,6 +1,8 @@
 #!/bin/sh
 
 # Install asn and it's init script.
+# Run the following after the first install:
+#	sudo update-rc.d asn defaults
 
 [ "$ASN" = "" ] && ASN=asn-static
 [ "$CHRDIR" = "" ] && CHRDIR=/var/chroot/asn
@@ -13,4 +15,4 @@ for x in $ASN $CHRDIR; do
 done
 
 install -D $ASN $CHRDIR/usr/sbin/asn || exit $?
-install -D start-stop-asn /etc/init.d/asn || exit $?
+install start-stop-asn /etc/init.d/asn || exit $?
