@@ -22,8 +22,6 @@ const (
 	ConnTO   = 200 * time.Millisecond
 	MaxSegSz = 4096
 	MoreFlag = uint16(1 << 15)
-
-	WithDeadline = false
 )
 
 const (
@@ -215,23 +213,28 @@ func IsNetTimeout(err error) bool {
 
 // Read full buffer from asn.conn unless preempted with state == closed.
 func (asn *asn) Read(b []byte) (n int, err error) {
-	for i := 0; n < len(b); n += i {
+	const dl = 200 * time.Millisecond
+	for i, nto := 0, 0; n < len(b); n += i {
 		if asn.IsClosed() {
 			err = io.EOF
 			asn.Diag("closed")
 			return
 		}
-		if WithDeadline {
-			asn.conn.SetReadDeadline(time.Now().Add(ConnTO))
-		}
+		asn.conn.SetReadDeadline(time.Now().Add(dl))
 		i, err = asn.conn.Read(b[n:])
-		if err != nil && !IsNetTimeout(err) {
+		if err != nil {
+			if IsNetTimeout(err) && nto < 5*60*3 { // 3 minutes
+				nto += 1
+				continue
+			}
 			if asn.IsClosed() {
 				err = io.EOF
 			} else {
 				asn.Diag(err)
 			}
 			return
+		} else {
+			nto = 0
 		}
 	}
 	return
@@ -300,15 +303,14 @@ func (asn *asn) Version() Version { return asn.version }
 
 // Write full buffer unless preempted by Closed state.
 func (asn *asn) Write(b []byte) (n int, err error) {
+	const dl = 200 * time.Millisecond
 	for i := 0; n < len(b); n += i {
 		if asn.IsClosed() {
 			err = io.EOF
 			asn.Diag("closed")
 			return
 		}
-		if WithDeadline {
-			asn.conn.SetWriteDeadline(time.Now().Add(ConnTO))
-		}
+		asn.conn.SetWriteDeadline(time.Now().Add(dl))
 		i, err = asn.conn.Write(b[n:])
 		if err != nil && !IsNetTimeout(err) {
 			asn.Diag(err)

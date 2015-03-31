@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 	"os/signal"
 	"runtime"
 	"strings"
@@ -32,7 +33,7 @@ type Adm struct {
 		req, handler Done
 	}
 	repos Repos
-	rxq   chan *PDU
+	clich chan *PDU
 	store bool
 }
 
@@ -92,19 +93,18 @@ func (cmd *Command) Admin(args ...string) {
 		}
 	}
 	if len(args) > 0 {
+		adm.clich = nil
+		sigch := make(chan os.Signal, 2)
+		signal.Notify(sigch, syscall.SIGINT, syscall.SIGTERM)
+		defer signal.Stop(sigch)
 		go func() {
-			switch sig := <-adm.cmd.Sig; sig {
+			switch sig := <-sigch; sig {
 			case syscall.SIGINT:
 				debug.Trace.WriteTo(debug.Log)
 				fallthrough
 			case syscall.SIGTERM:
-				signal.Stop(adm.cmd.Sig)
-				if adm.asn.tx.going {
-					close(adm.asn.tx.ch)
-				}
+				close(adm.asn.tx.ch)
 				runtime.Goexit()
-			case syscall.SIGUSR1:
-				debug.Trace.WriteTo(debug.Log)
 			}
 		}()
 		if args[0] == "-" {
@@ -113,6 +113,7 @@ func (cmd *Command) Admin(args ...string) {
 			err = adm.Exec(args...)
 		}
 	} else {
+		adm.clich = make(chan *PDU, 16)
 		err = adm.CLI()
 	}
 }
@@ -248,14 +249,15 @@ func (adm *Adm) handler() {
 		}
 		if r != nil {
 			err := r.(error)
+			if adm.clich != nil {
+				close(adm.clich)
+			}
 			adm.done.handler <- err
 			adm.done.req <- err
 		}
 	}()
 	for {
 		select {
-		case <-adm.cmd.Sig:
-			close(adm.asn.tx.ch)
 		case pdu, opened := <-adm.asn.rx.ch:
 			if !opened {
 				if adm.asn.rx.err != nil {
@@ -283,9 +285,9 @@ func (adm *Adm) handler() {
 					if err != nil {
 						panic(err)
 					}
-				} else if adm.rxq != nil {
+				} else if adm.clich != nil {
 					pdu.Clone()
-					adm.rxq <- pdu
+					adm.clich <- pdu
 				} else {
 					adm.ObjDump(pdu)
 				}

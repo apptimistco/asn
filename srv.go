@@ -11,16 +11,14 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"runtime"
+	"syscall"
 	"time"
 
 	"github.com/apptimistco/asn/debug"
 	"github.com/apptimistco/asn/debug/mutex"
 	"golang.org/x/net/websocket"
-)
-
-const (
-	ldl = 100 * time.Millisecond
 )
 
 type nopCloserWriter struct {
@@ -115,18 +113,21 @@ func (cmd *Command) Server(args ...string) {
 	cmd.Stdout = NopCloserWriter(ioutil.Discard)
 	cmd.Stderr.Close()
 	cmd.Stderr = NopCloserWriter(ioutil.Discard)
+	sigch := make(chan os.Signal, 2)
+	signal.Notify(sigch, syscall.SIGINT, syscall.SIGTERM, syscall.SIGUSR1)
+	defer signal.Stop(sigch)
 	for {
-		sig := <-srv.cmd.Sig
+		sig := <-sigch
 		srv.Diag("caught", sig)
-		switch {
-		case IsINT(sig):
+		switch sig {
+		case syscall.SIGINT:
 			debug.Trace.WriteTo(debug.Log)
 			srv.Close()
 			srv.Hangup()
 			runtime.Goexit()
-		case IsTERM(sig):
+		case syscall.SIGTERM:
 			srv.Close()
-		case IsUSR1(sig):
+		case syscall.SIGUSR1:
 			debug.Trace.WriteTo(debug.Log)
 		}
 	}
@@ -204,10 +205,9 @@ func (srv *Server) handler(conn net.Conn) {
 		srv.Log("disconnected", &ses.Keys.Client.Ephemeral)
 		ses.Reset()
 	}()
-	if WithDeadline {
-		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	}
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	n, err := conn.Read(ses.Keys.Client.Ephemeral[:])
+	conn.SetReadDeadline(time.Time{})
 	if err != nil {
 		srv.Log(err)
 		panic(err)
@@ -402,6 +402,7 @@ func (srv *Server) rm(ses *Ses) {
 }
 
 func (l *SrvListener) listen(srv *Server) {
+	const dl = 100 * time.Millisecond
 	for {
 		select {
 		case <-l.stop:
@@ -412,7 +413,7 @@ func (l *SrvListener) listen(srv *Server) {
 			l.done <- err
 			return
 		default:
-			l.ln.SetDeadline(time.Now().Add(ldl))
+			l.ln.SetDeadline(time.Now().Add(dl))
 			conn, err := l.ln.Accept()
 			if err == nil {
 				l.ln.SetDeadline(time.Time{})

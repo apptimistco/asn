@@ -9,9 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"regexp"
-	"syscall"
 	"testing"
 	"time"
 
@@ -60,9 +58,7 @@ func init() {
 		x.cmd.Stdin = &x.in
 		x.cmd.Stdout = &x.out
 		x.cmd.Stderr = NopCloserWriter(os.Stderr)
-		x.cmd.Sig = make(Sig, 1)
 		x.cmd.Done = make(Done, 1)
-		signal.Notify(x.cmd.Sig, syscall.SIGINT, syscall.SIGTERM)
 	}
 }
 
@@ -235,10 +231,13 @@ func (m AsnTestMap) StartServers() {
 }
 
 func (m AsnTestMap) StopServers() (err error) {
+	proc, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		return
+	}
+	proc.Signal(os.Interrupt)
 	for k, x := range m {
 		if x.mode.Server() {
-			atf.Log("stopping ", k, " ...")
-			x.cmd.Sig <- os.Interrupt
 			if xerr := x.cmd.Wait(); xerr != nil {
 				atf.Diag(k, "stopped with", xerr)
 				if err == nil {

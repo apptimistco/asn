@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -166,10 +165,6 @@ func IsHex(s string) bool {
 	return true
 }
 
-func IsINT(sig os.Signal) bool  { return sig == syscall.SIGINT }
-func IsTERM(sig os.Signal) bool { return sig == syscall.SIGTERM }
-func IsUSR1(sig os.Signal) bool { return sig == syscall.SIGUSR1 }
-
 func IsTopDir(fi os.FileInfo) bool {
 	fn := fi.Name()
 	return fi.IsDir() && len(fn) == ReposTopSz && IsHex(fn)
@@ -254,13 +249,7 @@ func main() {
 		cmd.ShowConfig()
 		return
 	}
-	cmd.Sig = make(Sig, 4)
 	cmd.Done = make(Done, 1)
-	signal.Notify(cmd.Sig,
-		syscall.SIGINT,
-		syscall.SIGTERM,
-		syscall.SIGUSR1)
-	defer signal.Stop(cmd.Sig)
 	defer FlushPDU()
 	if cmd.Flag.Admin || len(cmd.Cfg.Listen) == 0 {
 		go cmd.Admin(FS.Args()...)
@@ -312,7 +301,6 @@ type Command struct {
 	Stdin  ReadCloseWriteToer
 	Stdout io.WriteCloser
 	Stderr io.WriteCloser
-	Sig    Sig
 	Done   Done
 	Cfg    Config
 	Flag   struct {
@@ -417,9 +405,3 @@ func (cmd *Command) Wait() error { return cmd.Done.Wait() }
 type Done chan error
 
 func (done Done) Wait() error { return <-done }
-
-type Sig chan os.Signal
-
-func (sig Sig) INT()  { sig <- syscall.SIGINT }
-func (sig Sig) TERM() { sig <- syscall.SIGTERM }
-func (sig Sig) USR1() { sig <- syscall.SIGUSR1 }
