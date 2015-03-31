@@ -196,3 +196,9 @@ type DescError struct {
 func (e *DescError) Error() string {
 	return "asn: " + e.desc + ": " + e.err.Error()
 }
+
+type Usage struct{ usage string }
+
+func (e *Usage) Error() string {
+	return "asn: usage: " + e.usage
+}

@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	Usage = `Usage:	asn [FLAGS] [COMMAND [ARGS...]]
+	AsnUsage = `Usage:	asn [FLAGS] [COMMAND [ARGS...]]
 
 `
 	ExampleUsage = `
@@ -276,11 +276,11 @@ func MkdirAll(dn string) error {
 }
 
 func showHelp(out io.Writer) {
-	io.WriteString(out, Usage)
+	io.WriteString(out, AsnUsage)
 	io.WriteString(out, "Flags:\n\n")
 	FS.PrintDefaults()
 	io.WriteString(out, ExampleUsage)
-	io.WriteString(out, UsageCommands)
+	io.WriteString(out, ExecUsage)
 	io.WriteString(out, ExampleConfigs)
 }
 

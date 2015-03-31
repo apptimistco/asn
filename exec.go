@@ -7,7 +7,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -24,68 +23,68 @@ import (
 )
 
 const (
-	UsageApprove = `approve BLOB...`
-	UsageAuth    = `auth [-u USER] AUTH`
-	UsageBlob    = `blob <USER|[USER/]NAME> - CONTENT`
-	UsageCat     = `cat BLOB...`
-	UsageClone   = `clone [NAME][@TIME]`
-	UsageEcho    = `echo [STRING]...`
-	UsageFetch   = `fetch BLOB...`
-	UsageFilter  = `filter FILTER [ARGS... --] [BLOB...]`
-	UsageGC      = `gc [-v|--verbose] [-n|--dry-run] [@TIME]`
-	UsageIam     = `iam NAME`
-	UsageLS      = `ls [BLOB...]`
-	UsageMark    = `mark [-u USER] [LATITUDE LONGITUDE | 7?PLACE]`
-	UsageNewUser = `newuser [-b] <"actual"|"bridge"|"forum"|"place">`
-	UsageObjDump = `objdump BLOB...`
-	UsageRM      = `rm BLOB...`
-	UsageTrace   = `trace [COMMAND [ARG]]`
-	UsageUsers   = `users`
-	UsageVouch   = `vouch USER SIG`
-	UsageWho     = `who`
+	ExecApproveUsage = `approve BLOB...`
+	ExecAuthUsage    = `auth [-u USER] AUTH`
+	ExecBlobUsage    = `blob <USER|[USER/]NAME> - CONTENT`
+	ExecCatUsage     = `cat BLOB...`
+	ExecCloneUsage   = `clone [NAME][@TIME]`
+	ExecEchoUsage    = `echo [STRING]...`
+	ExecFetchUsage   = `fetch BLOB...`
+	ExecFilterUsage  = `filter FILTER [ARGS... --] [BLOB...]`
+	ExecGCUsage      = `gc [-v|--verbose] [-n|--dry-run] [@TIME]`
+	ExecIamUsage     = `iam NAME`
+	ExecLSUsage      = `ls [BLOB...]`
+	ExecMarkUsage    = `mark [-u USER] [LATITUDE LONGITUDE | 7?PLACE]`
+	ExecNewUserUsage = `newuser [-b] <"actual"|"bridge"|"forum"|"place">`
+	ExecObjDumpUsage = `objdump BLOB...`
+	ExecRMUsage      = `rm BLOB...`
+	ExecTraceUsage   = `trace [COMMAND [ARG]]`
+	ExecUsersUsage   = `users`
+	ExecVouchUsage   = `vouch USER SIG`
+	ExecWhoUsage     = `who`
 
-	UsageCommands = `Commands:
+	ExecUsage = `Commands:
 
-  ` + UsageApprove + `
+  ` + ExecApproveUsage + `
 	Before acknowledgment, the server forwards the matching blobs
 	to its owner or subscriber.
-  ` + UsageAuth + `
+  ` + ExecAuthUsage + `
 	Record user's ED255519 authentication key.
-  ` + UsageBlob + `
+  ` + ExecBlobUsage + `
 	Creates named blob.
-  ` + UsageCat + `
+  ` + ExecCatUsage + `
 	Returns the contents of the named blob.
-  ` + UsageClone + `
+  ` + ExecCloneUsage + `
 	Replicate or update an object repository.
-  ` + UsageEcho + `
+  ` + ExecEchoUsage + `
 	Returns space separated ARGS in the Ack data.
-  ` + UsageFilter + `
+  ` + ExecFilterUsage + `
 	Returns STDOUT of FILTER program run with list of blobs as STDIN.
-  ` + UsageFetch + `
+  ` + ExecFetchUsage + `
 	Before acknowledgement the server sends all matching blobs.
-  ` + UsageGC + `
+  ` + ExecGCUsage + `
 	Before acknowledgement the server purges older or all blobs
 	flagged for deletion.
-  ` + UsageIam + `
+  ` + ExecIamUsage + `
         Show NAME instead of LOGIN key in list of Who.
 	Used by servers in indirect clone request.
-  ` + UsageLS + `
+  ` + ExecLSUsage + `
 	Returns list of matching blobs.
-  ` + UsageMark + `
+  ` + ExecMarkUsage + `
 	Record user's location.
-  ` + UsageNewUser + `
+  ` + ExecNewUserUsage + `
 	Creates a new user and return keys in acknowledgment.
-  ` + UsageObjDump + `
+  ` + ExecObjDumpUsage + `
 	Returns the decoded header of the named blob
-  ` + UsageRM + `
+  ` + ExecRMUsage + `
 	Flag blobs for removal by garbage collector.
-  ` + UsageTrace + `
+  ` + ExecTraceUsage + `
 	Return and flush the PDU trace or manipulate its filter.
-  ` + UsageUsers + `
+  ` + ExecUsersUsage + `
 	List all users.
-  ` + UsageVouch + `
+  ` + ExecVouchUsage + `
 	Vouch for or deny USER's identity.
-  ` + UsageWho + `
+  ` + ExecWhoUsage + `
 	List logged in user names, if set, or login key.
 
 Where BLOB may be any of the following:
@@ -94,30 +93,6 @@ Where BLOB may be any of the following:
   '$'<'*' | SUM>[@TIME]
   ['~'['*' | '.' | '(' USERGLOB ')' | USER]][GLOB][@TIME]
 `
-)
-
-var (
-	ErrUsageApprove = errors.New("usage: " + UsageApprove)
-	ErrUsageAuth    = errors.New("usage: " + UsageAuth)
-	ErrUsageBlob    = errors.New("usage: " + UsageBlob)
-	ErrUsageCat     = errors.New("usage: " + UsageCat)
-	ErrUsageClone   = errors.New("usage: " + UsageClone)
-	ErrUsageEcho    = errors.New("usage: " + UsageEcho)
-	ErrUsageFetch   = errors.New("usage: " + UsageFetch)
-	ErrUsageFilter  = errors.New("usage: " + UsageFilter)
-	ErrUsageGC      = errors.New("usage: " + UsageGC)
-	ErrUsageIam     = errors.New("usage: " + UsageIam)
-	ErrUsageLS      = errors.New("usage: " + UsageLS)
-	ErrUsageMark    = errors.New("usage: " + UsageMark)
-	ErrUsageNewUser = errors.New("usage: " + UsageNewUser)
-	ErrUsageObjDump = errors.New("usage: " + UsageObjDump)
-	ErrUsageRM      = errors.New("usage: " + UsageRM)
-	ErrUsageTrace   = errors.New("usage: " + UsageTrace)
-	ErrUsageUsers   = errors.New("usage: " + UsageUsers)
-	ErrUsageVouch   = errors.New("usage: " + UsageVouch)
-	ErrUsageWho     = errors.New("usage: " + UsageWho)
-	ErrFIXME        = errors.New("FIXME")
-	ErrCantExec     = errors.New("asnsrv can't exec this command")
 )
 
 func (ses *Ses) RxExec(pdu *PDU) error {
@@ -134,7 +109,7 @@ func (ses *Ses) RxExec(pdu *PDU) error {
 	const demarcation = "\x00\x00"
 	dem := bytes.Index(cmd[:n], []byte(demarcation))
 	if dem < 0 && n == len(cmd) {
-		err := errors.New("command too long")
+		err := &Error{string(cmd[:16]) + "...", "too long"}
 		ses.Diag(err)
 		ses.asn.Ack(req, err)
 		return nil
@@ -167,7 +142,7 @@ func (ses *Ses) Exec(req Req, in ReadWriteToer,
 	ses.asn.Trace(debug.Id(ExecReqId), "rx", req, "exec", args)
 	switch args[0] {
 	case "exec-help", "help":
-		v = UsageCommands
+		v = ExecUsage
 	case "approve":
 		v = ses.ExecApprove(in, args[1:]...)
 	case "auth":
@@ -207,14 +182,14 @@ func (ses *Ses) Exec(req Req, in ReadWriteToer,
 	case "who":
 		v = ses.ExecWho(req, args[1:]...)
 	default:
-		v = errors.New("unknown exec command: " + args[0])
+		v = &Error{args[0], "unknown"}
 	}
 	return v
 }
 
 func (ses *Ses) ExecApprove(r io.Reader, args ...string) interface{} {
 	if len(args) < 1 {
-		return ErrUsageApprove
+		return &Usage{ExecApproveUsage}
 	}
 	owner := ses.user
 	sums := make(Sums, 0)
@@ -249,7 +224,7 @@ func (ses *Ses) ExecAuth(args ...string) interface{} {
 		args = args[2:]
 	}
 	if len(args) != 1 {
-		return ErrUsageAuth
+		return &Usage{ExecAuthUsage}
 	}
 	if len(args[0]) != (PubAuthSz * 2) {
 		return os.ErrInvalid
@@ -271,7 +246,7 @@ func (ses *Ses) ExecAuth(args ...string) interface{} {
 func (ses *Ses) ExecBlob(in ReadWriteToer, args ...string) interface{} {
 	owner := ses.user
 	if len(args) < 2 {
-		return ErrUsageBlob
+		return &Usage{ExecBlobUsage}
 	}
 	name := args[0]
 	if args[0][0] == '~' {
@@ -307,7 +282,7 @@ func (ses *Ses) ExecBlob(in ReadWriteToer, args ...string) interface{} {
 
 func (ses *Ses) ExecCat(req Req, r io.Reader, args ...string) interface{} {
 	if len(args) == 0 {
-		return ErrUsageCat
+		return &Usage{ExecCatUsage}
 	}
 	ack, err := ses.asn.NewAckSuccessPDUFile(req)
 	if err != nil {
@@ -343,7 +318,7 @@ func (ses *Ses) ExecCat(req Req, r io.Reader, args ...string) interface{} {
 
 func (ses *Ses) ExecClone(args ...string) interface{} {
 	if ses.asnsrv {
-		return ErrCantExec
+		return &Error{args[0], "won't run with offline server"}
 	}
 	var (
 		err   error
@@ -354,7 +329,7 @@ func (ses *Ses) ExecClone(args ...string) interface{} {
 	const fnlen = (SumSz - 1) * 2
 	nargs := len(args)
 	if nargs > 1 {
-		return ErrUsageClone
+		return &Usage{ExecCloneUsage}
 	} else if nargs == 1 {
 		var name string
 		after, name = ses.StripTime(args[0])
@@ -395,7 +370,7 @@ func (ses *Ses) execCloneRemote(after time.Time, name string) interface{} {
 		}
 	})
 	if remote == nil {
-		return errors.New("no remote session for " + name)
+		return &Error{name, "no such session"}
 	}
 	ls := NewPDUBuf()
 	v := ses.asn.Version()
@@ -443,10 +418,10 @@ func (ses *Ses) execCloneFetchAck(req Req, err error, ack *PDU) error {
 func (ses *Ses) ExecFetch(r io.Reader, args ...string) interface{} {
 	var err error
 	if len(args) < 1 {
-		return ErrUsageFetch
+		return &Usage{ExecFetchUsage}
 	}
 	if ses.asnsrv {
-		return ErrCantExec
+		return &Error{args[0], "won't run with offline server"}
 	}
 	err = ses.Blobber(func(fn string) error {
 		ses.asn.Tx(NewPDUFN(fn))
@@ -457,7 +432,7 @@ func (ses *Ses) ExecFetch(r io.Reader, args ...string) interface{} {
 
 func (ses *Ses) ExecFilter(req Req, r io.Reader, args ...string) interface{} {
 	if len(args) < 1 {
-		return ErrUsageFilter
+		return &Usage{ExecFilterUsage}
 	}
 	ack, err := ses.asn.NewAckSuccessPDUFile(req)
 	if err != nil {
@@ -512,7 +487,7 @@ func (ses *Ses) ExecFilter(req Req, r io.Reader, args ...string) interface{} {
 	<-errDone
 	if err = cmd.Wait(); err != nil {
 		ack.Free()
-		return errors.New(string(errbuf))
+		return &Error{args[0], string(errbuf)}
 	}
 	if err = <-blobberErr; err != nil {
 		ack.Free()
@@ -537,7 +512,7 @@ func (ses *Ses) ExecGC(req Req, args ...string) interface{} {
 		} else if strings.HasPrefix(arg, "@") {
 			after, _ = ses.StripTime(arg)
 		} else {
-			return ErrUsageGC
+			return &Usage{ExecGCUsage}
 		}
 	}
 	if dryrun || verbose {
@@ -576,7 +551,7 @@ func (ses *Ses) ExecGC(req Req, args ...string) interface{} {
 
 func (ses *Ses) ExecIam(args ...string) interface{} {
 	if len(args) != 1 {
-		return ErrUsageIam
+		return &Usage{ExecIamUsage}
 	}
 	ses.name = args[0]
 	return nil
@@ -662,7 +637,7 @@ func (ses *Ses) ExecNewUser(args ...string) interface{} {
 		}
 	}()
 	if len(args) < 1 {
-		err = ErrUsageNewUser
+		err = &Usage{ExecNewUserUsage}
 		return err
 	}
 	isBinary := args[0] == "-b"
@@ -670,7 +645,7 @@ func (ses *Ses) ExecNewUser(args ...string) interface{} {
 		args = args[1:]
 	}
 	if len(args) != 1 {
-		err = ErrUsageNewUser
+		err = &Usage{ExecNewUserUsage}
 		return err
 	}
 	owner := ses.user
@@ -721,7 +696,7 @@ func (ses *Ses) ExecNewUser(args ...string) interface{} {
 func (ses *Ses) ExecObjDump(r io.Reader, args ...string) interface{} {
 	out := &bytes.Buffer{}
 	if len(args) < 1 {
-		return ErrUsageObjDump
+		return &Usage{ExecObjDumpUsage}
 	}
 	if err := ses.Blobber(func(fn string) (err error) {
 		defer func() {
@@ -752,7 +727,7 @@ func (ses *Ses) ExecRM(r io.Reader, args ...string) interface{} {
 	buf := &bytes.Buffer{}
 	owner := ses.user
 	if len(args) < 1 {
-		return ErrUsageRM
+		return &Usage{ExecRMUsage}
 	}
 	err := ses.Blobber(func(fn string) error {
 		fmt.Fprintln(buf, ses.asn.repos.DePrefix(fn))
@@ -779,22 +754,22 @@ func (ses *Ses) ExecTrace(args ...string) interface{} {
 		return debug.Trace
 	case "filter", "unfilter", "resize":
 		ses.asn.Fixme(cmd)
-		return ErrFIXME
+		return &Error{cmd, "fixme"}
 	default:
-		return ErrUsageTrace
+		return &Usage{ExecTraceUsage}
 	}
 }
 
 func (ses *Ses) ExecUsers(args ...string) interface{} {
 	if len(args) != 0 {
-		return ErrUsageUsers
+		return &Usage{ExecUsersUsage}
 	}
 	return ses.asn.repos.users.LS()
 }
 
 func (ses *Ses) ExecVouch(args ...string) interface{} {
 	if len(args) != 2 {
-		return ErrUsageVouch
+		return &Usage{ExecVouchUsage}
 	}
 	owner := ses.asn.repos.users.UserString(args[0])
 	if owner == nil {
@@ -813,7 +788,7 @@ func (ses *Ses) ExecVouch(args ...string) interface{} {
 
 func (ses *Ses) ExecWho(req Req, args ...string) interface{} {
 	if len(args) != 0 {
-		return ErrUsageWho
+		return &Usage{ExecWhoUsage}
 	}
 	ack, err := ses.asn.NewAckSuccessPDUFile(req)
 	if err != nil {
