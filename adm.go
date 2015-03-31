@@ -9,8 +9,10 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os/signal"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/apptimistco/asn/debug"
@@ -90,6 +92,21 @@ func (cmd *Command) Admin(args ...string) {
 		}
 	}
 	if len(args) > 0 {
+		go func() {
+			switch sig := <-adm.cmd.Sig; sig {
+			case syscall.SIGINT:
+				debug.Trace.WriteTo(debug.Log)
+				fallthrough
+			case syscall.SIGTERM:
+				signal.Stop(adm.cmd.Sig)
+				if adm.asn.tx.going {
+					close(adm.asn.tx.ch)
+				}
+				runtime.Goexit()
+			case syscall.SIGUSR1:
+				debug.Trace.WriteTo(debug.Log)
+			}
+		}()
 		if args[0] == "-" {
 			err = adm.script()
 		} else {

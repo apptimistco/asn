@@ -7,24 +7,22 @@
 package main
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"syscall"
 
+	"github.com/apptimistco/asn/debug"
 	"github.com/rocky/go-gnureadline"
 )
 
 func (adm *Adm) CLI() (err error) {
 	var prompt, line string
-	var inrl bool
 	adm.rxq = make(chan *PDU, 16)
 	home := os.Getenv("HOME")
-	term := os.Getenv("TERM")
 	history := filepath.Join(home, ".asnadm_history")
+	defer gnureadline.WriteHistory(history)
 	rc := filepath.Join(home, ".asnadmrc")
 	if s := adm.asn.Debug.String(); s == "" {
 		prompt = "asnadm: "
@@ -41,46 +39,48 @@ func (adm *Adm) CLI() (err error) {
 	} else {
 		err = nil
 	}
-	gnureadline.StifleHistory(16)
-	winch := make(chan os.Signal, 1)
+	gnureadline.StifleHistory(32)
+	defer gnureadline.Rl_reset_terminal("")
 	done := make(Done, 1)
-	signal.Notify(winch, syscall.SIGWINCH)
+	defer close(done)
+	signal.Notify(adm.cmd.Sig, syscall.SIGWINCH)
 	go func() {
-		for {
-			select {
-			case pdu := <-adm.rxq:
-				if inrl {
-					println()
-					adm.ObjDump(pdu)
-					gnureadline.Rl_resize_terminal()
-				} else {
-					adm.ObjDump(pdu)
-				}
-			case sig := <-winch:
-				if sig == syscall.SIGWINCH {
-					gnureadline.Rl_resize_terminal()
-				} else if sig == syscall.SIGTERM {
-					signal.Stop(winch)
-					gnureadline.Rl_reset_terminal(term)
-					done <- nil
-					runtime.Goexit()
-				}
+		for err == nil {
+			line = ""
+			line, err = gnureadline.Readline(prompt, true)
+			if err == nil {
+				err = adm.cmdLine(line)
 			}
 		}
+		done <- nil
 	}()
-	for err == nil {
-		inrl = true
-		line, err = gnureadline.Readline(prompt, true)
-		inrl = false
-		if err == nil {
-			err = adm.cmdLine(line)
-			if err != nil && err != io.EOF {
-				fmt.Println(err)
-				err = nil
+	for {
+		select {
+		case <-done:
+			return
+		case pdu := <-adm.rxq:
+			if line == "" {
+				println()
+				adm.ObjDump(pdu)
+				gnureadline.Rl_resize_terminal()
+			} else {
+				adm.ObjDump(pdu)
+			}
+		case sig := <-adm.cmd.Sig:
+			switch sig {
+			case syscall.SIGWINCH:
+				gnureadline.Rl_resize_terminal()
+			case syscall.SIGINT:
+				adm.Log("sigint")
+				debug.Trace.WriteTo(debug.Log)
+				fallthrough
+			case syscall.SIGTERM:
+				err = io.EOF
+				<-done
+				return
+			case syscall.SIGUSR1:
+				debug.Trace.WriteTo(debug.Log)
 			}
 		}
 	}
-	winch <- syscall.SIGTERM
-	<-done
-	return
 }
