@@ -215,12 +215,12 @@ func main() {
 			return
 		}
 		debug.Redirect(f)
-		cmd.Log("start", pid)
 	}
+	cmd.Log("start", pid)
 	defer func() {
 		cmd.Log("end", pid)
 		if err != nil {
-			cmd.Diag(debug.Depth(2), err)
+			cmd.Log(debug.Depth(2), err)
 			io.WriteString(cmd.Stderr, err.Error())
 			cmd.Stderr.Write(NL)
 			Exit(1)
@@ -254,12 +254,14 @@ func main() {
 		cmd.ShowConfig()
 		return
 	}
-	cmd.Sig = make(Sig, 1)
+	cmd.Sig = make(Sig, 4)
 	cmd.Done = make(Done, 1)
 	signal.Notify(cmd.Sig,
 		syscall.SIGINT,
 		syscall.SIGTERM,
 		syscall.SIGUSR1)
+	defer signal.Stop(cmd.Sig)
+	defer FlushPDU()
 	if cmd.Flag.Admin || len(cmd.Cfg.Listen) == 0 {
 		go cmd.Admin(FS.Args()...)
 	} else {
@@ -268,7 +270,6 @@ func main() {
 	if err = cmd.Wait(); err == io.EOF {
 		err = nil
 	}
-	FlushPDU()
 }
 
 func MkdirAll(dn string) error {
