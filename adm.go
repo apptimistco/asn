@@ -6,6 +6,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"net"
 	"runtime"
@@ -39,6 +40,14 @@ func (cmd *Command) Admin(args ...string) {
 	}
 	err := cmd.Cfg.Check(AdminMode)
 	defer func() {
+		if r := recover(); r != nil && err == nil {
+			switch t := r.(type) {
+			case error:
+				err = t
+			case string:
+				err = errors.New(t)
+			}
+		}
 		cmd.Done <- err
 	}()
 	if err != nil {
