@@ -179,7 +179,6 @@ func (srv *Server) handler(conn net.Conn) {
 	ses.Set(&srv.repos)
 	ses.Set(srv.ForEachLogin)
 	srv.add(&ses)
-	ses.asn.Set(conn)
 	defer func() {
 		r := recover()
 		ses.Lock()
@@ -222,6 +221,7 @@ func (srv *Server) handler(conn net.Conn) {
 		&ses.Keys.Client.Ephemeral, svc.Server.Pub.Encr,
 		svc.Server.Sec.Encr))
 	srv.Log("connected", &ses.Keys.Client.Ephemeral)
+	ses.asn.Set(conn)
 	for {
 		pdu, opened := <-ses.asn.rx.ch
 		if !opened {
