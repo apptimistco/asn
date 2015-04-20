@@ -424,6 +424,7 @@ func (ses *Ses) ExecFetch(r io.Reader, args ...string) interface{} {
 		return &Error{args[0], "won't run with offline server"}
 	}
 	err = ses.Blobber(func(fn string) error {
+		ses.asn.Log("sending:", fn)
 		ses.asn.Tx(NewPDUFN(fn))
 		return nil
 	}, r, args...)
