@@ -119,6 +119,7 @@ func (asn *asn) gorx() {
 		}
 		n := l & ^MoreFlag
 		if n > MaxSegSz {
+			asn.Diag("l, n:", l, n)
 			panic(ErrTooLarge)
 		}
 		if n == 0 {
@@ -289,17 +290,15 @@ func (asn *asn) Version() Version { return asn.version }
 // Write full buffer unless preempted by Closed state.
 func (asn *asn) Write(b []byte) (n int, err error) {
 	const dl = 200 * time.Millisecond
-	for i := 0; n < len(b); n += i {
-		if asn.IsClosed() {
-			err = io.EOF
-			asn.Diag("closed")
-			return
-		}
+	for i := 0; n < len(b) && err == nil; n += i {
 		asn.conn.SetWriteDeadline(time.Now().Add(dl))
 		i, err = asn.conn.Write(b[n:])
-		if err != nil && !IsNetTimeout(err) {
+		if asn.IsClosed() {
+			err = io.EOF
+		} else if IsNetTimeout(err) {
+			err = nil
+		} else if err != nil {
 			asn.Diag(err)
-			return
 		}
 	}
 	return
