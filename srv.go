@@ -165,7 +165,7 @@ func (srv *Server) ForEachLogin(f func(*Ses)) {
 	srv.Lock()
 	defer srv.Unlock()
 	for _, ses := range srv.sessions {
-		if ses != nil && ses.asn.state == established {
+		if ses != nil && ses.asn.IsEstablished() {
 			f(ses)
 		}
 	}
@@ -186,6 +186,7 @@ func (srv *Server) handler(conn net.Conn) {
 		ses.Unlock()
 		if r != nil {
 			err := r.(error)
+			srv.Log(err)
 			ses.asn.Diag(debug.Depth(3), err)
 		}
 		for i := 0; ses.asn.tx.going; i += 1 {
