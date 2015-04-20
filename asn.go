@@ -19,7 +19,6 @@ import (
 
 const (
 	AsnStr   = "asn"
-	ConnTO   = 200 * time.Millisecond
 	MaxSegSz = 4096
 	MoreFlag = uint16(1 << 15)
 )
@@ -207,34 +206,20 @@ func (asn *asn) gotx() {
 }
 
 func IsNetTimeout(err error) bool {
-	e, ok := err.(net.Error)
-	return ok && e.Timeout()
+	e, is_net_error := err.(net.Error)
+	return is_net_error && e.Timeout()
 }
 
 // Read full buffer from asn.conn unless preempted with state == closed.
 func (asn *asn) Read(b []byte) (n int, err error) {
 	const dl = 200 * time.Millisecond
-	for i, nto := 0, 0; n < len(b); n += i {
-		if asn.IsClosed() {
-			err = io.EOF
-			asn.Diag("closed")
-			return
-		}
+	for i := 0; n < len(b) && err == nil; n += i {
 		asn.conn.SetReadDeadline(time.Now().Add(dl))
 		i, err = asn.conn.Read(b[n:])
-		if err != nil {
-			if IsNetTimeout(err) && nto < 5*60*3 { // 3 minutes
-				nto += 1
-				continue
-			}
-			if asn.IsClosed() {
-				err = io.EOF
-			} else {
-				asn.Diag(err)
-			}
-			return
-		} else {
-			nto = 0
+		if asn.IsClosed() {
+			err = io.EOF
+		} else if IsNetTimeout(err) {
+			err = nil
 		}
 	}
 	return
