@@ -245,11 +245,9 @@ func (srv *Server) handler(conn net.Conn) {
 			err = ses.RxExec(pdu)
 		case LoginReqId:
 			if err = ses.RxLogin(pdu); err != nil {
-				panic(err)
+				// FIXME block subsequent attempts
+				// and eventually terminate
 			}
-			ses.asn.Log("login, ephemeral:",
-				&ses.Keys.Client.Login,
-				&ses.Keys.Client.Ephemeral)
 		case BlobId:
 			if bytes.Equal(ses.Keys.Client.Login.Bytes(),
 				svc.Admin.Pub.Encr.Bytes()) ||

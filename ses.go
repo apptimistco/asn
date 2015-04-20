@@ -71,7 +71,7 @@ func (ses *Ses) RxLogin(pdu *PDU) (err error) {
 	}
 	ses.asn.Trace(debug.Id(LoginReqId), "rx", req, "login",
 		&ses.Keys.Client.Login, &sig)
-	err = ErrFailure
+	err = os.ErrPermission
 	login := &ses.Keys.Client.Login
 	ses.user = ses.asn.repos.users.User(login)
 	switch {
@@ -100,8 +100,11 @@ func (ses *Ses) RxLogin(pdu *PDU) (err error) {
 		pub, sec, _ := NewRandomEncrKeys()
 		ses.asn.Ack(req, pub.Bytes(), nonce.Bytes())
 		ses.Keys.Server.Ephemeral = *pub
-		ses.asn.Diag("login (key, nonce):",
-			&ses.Keys.Server.Ephemeral, &nonce)
+		ses.asn.Log("login; client, server ephemeral; nonce:",
+			&ses.Keys.Client.Login,
+			&ses.Keys.Client.Ephemeral,
+			&ses.Keys.Server.Ephemeral,
+			&nonce)
 		ses.asn.Set(NewBox(2, &nonce, &ses.Keys.Client.Ephemeral,
 			&ses.Keys.Server.Ephemeral, sec))
 		if ses.user != nil {
@@ -109,9 +112,10 @@ func (ses *Ses) RxLogin(pdu *PDU) (err error) {
 		}
 		ses.asn.state = established
 	} else {
-		ses.asn.Diag("login", err)
+		ses.asn.Log("failed login:", err)
+		ses.asn.Ack(req, err)
 	}
-	return
+	return nil
 }
 
 func (ses *Ses) Send(k *PubEncr, f *file.File) {
