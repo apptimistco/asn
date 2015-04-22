@@ -209,7 +209,7 @@ func (srv *Server) handler(conn net.Conn) {
 		n, err := conn.Read(ses.Keys.Client.Ephemeral[:])
 		if err == nil {
 			if n != PubEncrSz {
-				panic(Error{"Oops!", "incomplete ephemeral key"})
+				panic(Error{"Oops!", "incomplete ephemeral"})
 			}
 			break
 		}
@@ -222,9 +222,10 @@ func (srv *Server) handler(conn net.Conn) {
 		svc.Server.Sec.Encr))
 	srv.Log("connected", &ses.Keys.Client.Ephemeral)
 	ses.asn.Set(conn)
+	var loginErr error // close with any rx after login failure
 	for {
 		pdu, opened := <-ses.asn.rx.ch
-		if !opened {
+		if !opened || loginErr != nil {
 			runtime.Goexit()
 		}
 		err := pdu.Open()
@@ -245,10 +246,7 @@ func (srv *Server) handler(conn net.Conn) {
 		case ExecReqId:
 			err = ses.RxExec(pdu)
 		case LoginReqId:
-			if err = ses.RxLogin(pdu); err != nil {
-				// FIXME block subsequent attempts
-				// and eventually terminate
-			}
+			loginErr = ses.RxLogin(pdu)
 		case BlobId:
 			if bytes.Equal(ses.Keys.Client.Login.Bytes(),
 				svc.Admin.Pub.Encr.Bytes()) ||

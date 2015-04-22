@@ -115,7 +115,7 @@ func (ses *Ses) RxLogin(pdu *PDU) (err error) {
 		ses.asn.Log("failed login:", err)
 		ses.asn.Ack(req, err)
 	}
-	return nil
+	return
 }
 
 func (ses *Ses) Send(k *PubEncr, f *file.File) {
