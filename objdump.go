@@ -16,7 +16,9 @@ func ObjDump(w io.Writer, r io.Reader) (err error) {
 	if err != nil {
 		return
 	}
-	fmt.Fprintln(w, blob)
+	if blob.Name != AsnMark {
+		fmt.Fprintln(w, blob)
+	}
 	for _, fn := range AsnPubEncrLists {
 		if strings.HasPrefix(blob.Name, fn+"/") {
 			// only show blob header

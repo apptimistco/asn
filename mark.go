@@ -5,7 +5,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -81,10 +80,7 @@ func (m *Mark) Set(v interface{}) error {
 }
 
 func (m *Mark) String() string {
-	b := &bytes.Buffer{}
-	fmt.Fprintln(b, "markey:", m.Key.String())
-	fmt.Fprint(b, m.Loc.String())
-	return b.String()
+	return fmt.Sprint("mark: ", m.Key.String(), " ", m.Loc.String())
 }
 
 func (m *Mark) WriteTo(w io.Writer) (n int64, err error) {
@@ -186,12 +182,7 @@ func (loc *MarkLoc) ReadFrom(r io.Reader) (n int64, err error) {
 
 func (loc *MarkLoc) String() string {
 	if loc.IsPlace() {
-		b := &bytes.Buffer{}
-		fmt.Fprint(b, "place: ", loc.Place())
-		if eta := loc.ETA(); eta != 0 {
-			fmt.Fprint(b, "\neta: ", eta)
-		}
-		return b.String()
+		return fmt.Sprint(loc.Place(), " ", loc.ETA())
 	} else {
 		ll := loc.LL()
 		return ll.String()
@@ -211,5 +202,5 @@ func (p MarkPlace) String() string { return hex.EncodeToString(p) }
 type MarkLL struct{ Lat, Lon float64 }
 
 func (ll *MarkLL) String() string {
-	return fmt.Sprintf("lat: %0.6f\nlon: %0.6f", ll.Lat, ll.Lon)
+	return fmt.Sprintf("%0.6f %0.6f", ll.Lat, ll.Lon)
 }
