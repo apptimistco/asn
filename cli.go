@@ -25,10 +25,6 @@ func (adm *Adm) CLI() (err error) {
 	history := filepath.Join(home, ".asnadm_history")
 	defer gnureadline.WriteHistory(history)
 	rc := filepath.Join(home, ".asnadmrc")
-	prompt := "asnadm: "
-	if s := adm.asn.Debug.String(); s != "" {
-		prompt = s + "# "
-	}
 	if _, err = os.Stat(rc); err == nil {
 		if err = gnureadline.ReadInitFile(rc); err != nil {
 			return
@@ -51,7 +47,7 @@ func (adm *Adm) CLI() (err error) {
 		for {
 			var rlerr error
 			line = ""
-			line, rlerr = gnureadline.Readline(prompt, true)
+			line, rlerr = gnureadline.Readline("asn# ", true)
 			if rlerr != nil || quit {
 				break
 			}
