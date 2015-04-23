@@ -7,6 +7,7 @@
 package main
 
 import (
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -30,7 +31,7 @@ func (adm *Adm) CLI() (err error) {
 	}
 	if _, err = os.Stat(rc); err == nil {
 		if err = gnureadline.ReadInitFile(rc); err != nil {
-			return err
+			return
 		}
 	}
 	if _, err = os.Stat(history); err == nil {
@@ -55,14 +56,22 @@ func (adm *Adm) CLI() (err error) {
 				break
 			}
 			err = adm.cmdLine(line)
-			if err != nil || quit {
+			if err != nil {
+				println(err.Error())
+				if err == io.EOF {
+					quit = true
+				} else {
+					err = nil
+				}
+			}
+			if quit {
 				break
 			}
 		}
 		done <- nil
 	}()
 	defer gnureadline.Rl_reset_terminal("")
-	for {
+	for !quit {
 		select {
 		case <-done:
 			return
@@ -71,7 +80,6 @@ func (adm *Adm) CLI() (err error) {
 				quit = true
 				proc.Signal(os.Kill)
 				<-done
-				return
 			} else if line == "" {
 				println()
 				adm.ObjDump(pdu)
@@ -83,4 +91,5 @@ func (adm *Adm) CLI() (err error) {
 			gnureadline.Rl_resize_terminal()
 		}
 	}
+	return
 }
