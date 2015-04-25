@@ -289,7 +289,7 @@ BLOB is one of these ASN object references:
     BLOB = -
     BLOB = FILE | DIR
     BLOB = '$'<'*' | SUM>[@TIME]
-    BLOB = ['~'['*' | '.' | '(' USERGLOB ')' | USER]][GLOB][@TIME]
+    BLOB = ['~'['*' | '.' | '(' USERGLOB ')' | USER] | '/'][GLOB][@TIME]
 
 The hyphen ('-') indicates that additional references are listed after the
 end-of-command separator.
@@ -307,6 +307,9 @@ a parentheses enclosed glob pattern that is expanded to the list of users
 having that pattern. Otherwise, USER is a UTF-8 hexadecimal encoding of the
 32-byte public encryption key that may be abbreviated to as few as 8
 characters.
+
+A leading forward slash references the service user; so, `/news/today.svg` is
+an alias to `~SERVICE/news/today.svg`
 
 GLOB may have forward slash ("/") hierarchy with `*` and `?` expansion
 characters to match repository names (e.g. `asn/hel*` for `asn/hello`)

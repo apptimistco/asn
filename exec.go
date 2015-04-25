@@ -249,7 +249,15 @@ func (ses *Ses) ExecBlob(in ReadWriteToer, args ...string) interface{} {
 		return &Usage{ExecBlobUsage}
 	}
 	name := args[0]
-	if args[0][0] == '~' {
+	switch args[0][0] {
+	case '/':
+		admin := ses.asn.repos.users.User(ses.cfg.Keys.Admin.Pub.Encr)
+		if owner != admin {
+			return os.ErrPermission
+		}
+		owner = ses.asn.repos.users.User(ses.cfg.Keys.Server.Pub.Encr)
+		name = args[0][1:]
+	case '~':
 		slash := strings.Index(args[0][:], "/")
 		if slash < 0 {
 			slash = len(name)
@@ -812,6 +820,7 @@ func (ses *Ses) Blobber(filter func(fn string) error, r io.Reader,
 	var mustExist bool
 	var scanner *bufio.Scanner
 	repos := ses.asn.repos
+	service := ses.asn.repos.users.User(ses.cfg.Keys.Server.Pub.Encr)
 	filterIfNewer := func(fn string) error {
 		if this.IsZero() {
 			return filter(fn)
@@ -828,35 +837,39 @@ func (ses *Ses) Blobber(filter func(fn string) error, r io.Reader,
 		}
 		return err
 	}
-	uf := func(u *User) error {
+	uf := func(u *User) (err error) {
+		var matches []string
+		defer func() {
+			if err != nil {
+				ses.asn.Fixme(debug.Depth(2), err)
+			}
+			matches = nil
+		}()
 		if u == nil {
-			return ErrNOENT
+			err = ErrNOENT
+			return
 		}
 		if umatch != "" {
 			uglob := repos.Join(u.Join(umatch))
-			matches, err := filepath.Glob(uglob)
-			if err != nil {
-				return err
-			}
+			matches, _ = filepath.Glob(uglob)
 			if len(matches) == 0 {
 				return nil
 			}
-			matches = nil
 		}
-		matches, err := filepath.Glob(repos.Join(u.Join(glob)))
-		defer func() { matches = nil }()
+		matches, err = filepath.Glob(repos.Join(u.Join(glob)))
 		if err != nil {
-			return err
+			return
 		}
 		if len(matches) == 0 && mustExist {
-			return os.ErrNotExist
+			err = os.ErrNotExist
+			return
 		}
 		for _, match := range matches {
 			if err = filepath.Walk(match, walker); err != nil {
-				return err
+				return
 			}
 		}
-		return err
+		return
 	}
 	if len(args) == 0 {
 		args = []string{""}
@@ -887,6 +900,12 @@ func (ses *Ses) Blobber(filter func(fn string) error, r io.Reader,
 		default:
 			glob, mustExist = arg, true
 			err = uf(ses.user)
+		case arg == "/":
+			glob, mustExist = "*", false
+			err = uf(service)
+		case arg[0] == '/':
+			glob, mustExist = arg[1:], true
+			err = uf(service)
 		case staterr == nil && fi != nil:
 			err = filterIfNewer(arg)
 		case arg == "-":
