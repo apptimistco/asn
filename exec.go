@@ -558,8 +558,7 @@ func (ses *Ses) ExecIam(args ...string) interface{} {
 	return nil
 }
 
-func (ses *Ses) ExecLS(req Req,
-	r io.Reader, args ...string) interface{} {
+func (ses *Ses) ExecLS(req Req, r io.Reader, args ...string) interface{} {
 	ack, err := ses.asn.NewAckSuccessPDUFile(req)
 	if err != nil {
 		return err
@@ -876,7 +875,7 @@ func (ses *Ses) Blobber(filter func(fn string) error, r io.Reader,
 			}
 			arg = scanner.Text()
 		} else if len(args) == 0 {
-			break
+			return
 		} else {
 			arg = args[0]
 			args = args[1:]
@@ -889,8 +888,8 @@ func (ses *Ses) Blobber(filter func(fn string) error, r io.Reader,
 		slash := strings.Index(arg, "/")
 		closeParen := strings.Index(arg, ")")
 		switch {
-		default:
-			glob, mustExist = arg, true
+		case arg == "", arg == "~", arg == "*":
+			glob, mustExist = "*", false
 			err = uf(ses.user)
 		case arg == "/":
 			glob, mustExist = "*", false
@@ -898,13 +897,8 @@ func (ses *Ses) Blobber(filter func(fn string) error, r io.Reader,
 		case arg[0] == '/':
 			glob, mustExist = arg[1:], true
 			err = uf(service)
-		case staterr == nil && fi != nil:
-			err = filterIfNewer(arg)
 		case arg == "-":
 			scanner = bufio.NewScanner(r)
-		case arg == "", arg == "~", arg == "*":
-			glob = "*"
-			err = uf(ses.user)
 		case arg[0:2] == "~/":
 			glob, mustExist = arg[2:], true
 			err = uf(ses.user)
@@ -940,6 +934,11 @@ func (ses *Ses) Blobber(filter func(fn string) error, r io.Reader,
 		case arg[0] == '~' && slash > 0:
 			glob, mustExist = arg[slash+1:], true
 			err = uf(repos.users.UserString(arg[1:slash]))
+		case staterr == nil && fi != nil:
+			err = filterIfNewer(arg)
+		default:
+			glob, mustExist = arg, true
+			err = uf(ses.user)
 		}
 	}
 	return
