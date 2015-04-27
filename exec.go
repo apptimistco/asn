@@ -132,59 +132,51 @@ func (ses *Ses) GoExec(req Req, pdu *PDU, args ...string) {
 	ses.Unlock()
 }
 
-func (ses *Ses) Exec(req Req, in ReadWriteToer,
-	args ...string) (v interface{}) {
-	defer func() {
-		if err, iserr := v.(error); iserr && err != nil {
-			ses.asn.Fixme(debug.Depth(2), err)
-		}
-	}()
+func (ses *Ses) Exec(req Req, in ReadWriteToer, args ...string) interface{} {
 	ses.asn.Trace(debug.Id(ExecReqId), "rx", req, "exec", args)
 	switch args[0] {
 	case "exec-help", "help":
-		v = ExecUsage
+		return ExecUsage
 	case "approve":
-		v = ses.ExecApprove(in, args[1:]...)
+		return ses.ExecApprove(in, args[1:]...)
 	case "auth":
-		v = ses.ExecAuth(args[1:]...)
+		return ses.ExecAuth(args[1:]...)
 	case "blob":
-		v = ses.ExecBlob(in, args[1:]...)
+		return ses.ExecBlob(in, args[1:]...)
 	case "cat":
-		v = ses.ExecCat(req, in, args[1:]...)
+		return ses.ExecCat(req, in, args[1:]...)
 	case "clone":
-		v = ses.ExecClone(args[1:]...)
+		return ses.ExecClone(args[1:]...)
 	case "echo":
-		v = strings.Join(args[1:], " ") + "\n"
+		return strings.Join(args[1:], " ") + "\n"
 	case "fetch":
-		v = ses.ExecFetch(in, args[1:]...)
+		return ses.ExecFetch(in, args[1:]...)
 	case "filter":
-		v = ses.ExecFilter(req, in, args[1:]...)
+		return ses.ExecFilter(req, in, args[1:]...)
 	case "gc":
-		v = ses.ExecGC(req, args[1:]...)
+		return ses.ExecGC(req, args[1:]...)
 	case "iam":
-		v = ses.ExecIam(args[1:]...)
+		return ses.ExecIam(args[1:]...)
 	case "ls":
-		v = ses.ExecLS(req, in, args[1:]...)
+		return ses.ExecLS(req, in, args[1:]...)
 	case "mark":
-		v = ses.ExecMark(args[1:]...)
+		return ses.ExecMark(args[1:]...)
 	case "newuser":
-		v = ses.ExecNewUser(args[1:]...)
+		return ses.ExecNewUser(args[1:]...)
 	case "objdump":
-		v = ses.ExecObjDump(in, args[1:]...)
+		return ses.ExecObjDump(in, args[1:]...)
 	case "rm":
-		v = ses.ExecRM(in, args[1:]...)
+		return ses.ExecRM(in, args[1:]...)
 	case "trace":
-		v = ses.ExecTrace(args[1:]...)
+		return ses.ExecTrace(args[1:]...)
 	case "users":
-		v = ses.ExecUsers(args[1:]...)
+		return ses.ExecUsers(args[1:]...)
 	case "vouch":
-		v = ses.ExecVouch(args[1:]...)
+		return ses.ExecVouch(args[1:]...)
 	case "who":
-		v = ses.ExecWho(req, args[1:]...)
-	default:
-		v = &Error{args[0], "unknown"}
+		return ses.ExecWho(req, args[1:]...)
 	}
-	return v
+	return &Error{args[0], "unknown"}
 }
 
 func (ses *Ses) ExecApprove(r io.Reader, args ...string) interface{} {
