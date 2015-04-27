@@ -439,15 +439,15 @@ func (ses *Ses) ExecFilter(req Req, r io.Reader, args ...string) interface{} {
 	if err != nil {
 		return err
 	}
-	filterArgs := []string{}
-	blobArgs := args[1:]
-	for i, arg := range args[1:] {
+	blobs := []string{}
+	for i, arg := range args {
 		if arg == "--" {
-			filterArgs = args[1:i]
-			blobArgs = args[i+1:]
+			blobs = args[i+2:]
+			args = args[:i]
+			break
 		}
 	}
-	cmd := exec.Command(args[0], filterArgs...)
+	cmd := exec.Command(args[0], args[1:]...)
 	cmdStdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -469,11 +469,10 @@ func (ses *Ses) ExecFilter(req Req, r io.Reader, args ...string) interface{} {
 	errDone := make(chan bool, 1)
 	go func() {
 		defer cmdStdin.Close()
-		ses.asn.Diag("blobArgs:", strings.Join(blobArgs, " "))
 		blobberErr <- ses.Blobber(func(fn string) error {
 			fmt.Fprintln(cmdStdin, fn)
 			return nil
-		}, r, blobArgs...)
+		}, r, blobs...)
 
 	}()
 	go func() {
