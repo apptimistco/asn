@@ -93,7 +93,11 @@ func (asn *asn) Ack(req Req, argv ...interface{}) {
 			err = t
 			argv = argv[1:]
 		case nil:
-			argv = argv[1:]
+			if len(argv) > 1 {
+				argv = argv[1:]
+			} else {
+				argv = argv[:0]
+			}
 		}
 	}
 	ack := NewPDUBuf()
