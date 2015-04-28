@@ -392,8 +392,8 @@ This requests blobs with the given SHA sums.
     filter FILTER [ARGS... --] [BLOB...]
 
 The device may exec this command in the `established` state for the server to
-acknowledge with the output of the FILTER program with the list of newline
-separated blob filenames as the program input.
+acknowledge with the output of the FILTER program that is given the contents
+of the referenced blobs as program input.
 
 ### gc ###
     gc [@TIME]
