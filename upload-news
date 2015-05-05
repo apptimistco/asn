@@ -1,29 +1,27 @@
 #!/bin/bash
 
-usage="${0##*/} THUMB.svg FULL.svg"
+usage="${0##*/} thumb_NAME.svg full_NAME.svg"
 
 : ${ASN_CONFIG:=test-adm}
 : ${ASN_URL:=ws://104.154.68.215:80/asn/test-gcloud.ws}
 
-if [ $# -ne 2 ] ; then
+if [[ $# -ne 2 ||
+	${1%_*} != "thumb" ||
+	${1##*.} != svg ||
+	${2%_*} != "full" ||
+	${2##*.} != svg ||
+	${1#*thumb_} != ${2#*full_} ]]; then
 	echo $usage >/dev/stderr
 	exit 1
 fi
 
-thumb=$1
-full=$2
+upload-news() {
+	newsA=${1##*/}
+	newsB=${newsA/_//}
+	newsC=${newsB//[[:space:]]/_}
+	gzip -c $1 |
+		./asn -config $ASN_CONFIG -server $ASN_URL blob /news/${newsC}.gz
+}
 
-for f in $thumb $full; do
-	if [ ! -r "$f" ] ; then
-		echo Error: can\'t read \""$f"\"
-		exit 2
-	fi
-done
-
-thumb_dst=$(echo ${tumb##*/} | tr -d -c '[:alnum:]_.')
-full_dst=$(echo ${full##*/} | tr -d -c '[:alnum:]_.')
-
-gzip -c $thumb |
-	./asn -config $ASN_CONFIG -server $ASN_URL blob /news/thumbs/${thumb_dst}.gz
-gzip -c $thumb |
-	./asn -config $ASN_CONFIG -server $ASN_URL blob /news/full/${full_dst}.gz
+upload-news $1
+upload-news $2
