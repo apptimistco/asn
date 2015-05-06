@@ -209,25 +209,32 @@ func (adm *Adm) Dial(durl *URL) (net.Conn, error) {
 		adm.Diag("dialing", scheme, addr)
 		return net.DialUnix(scheme, nil, addr)
 	case "ws":
-		turl := durl.String()
-		adm.Diag("dialing", turl)
 		if durl.Host == "" {
-			durl.Host = "localhost:http"
+			durl.Host = "localhost:80"
 		}
+		if _, port, _ := net.SplitHostPort(durl.Host); port == "" {
+			durl.Host = net.JoinHostPort(durl.Host, "80")
+		}
+		adm.Diag("dialing", durl.Host)
 		nc, err := net.Dial("tcp", durl.Host)
 		if err != nil {
 			adm.Diag(err)
 			return nil, err
 		}
+		turl := durl.String()
 		origin := "http://localhost" // FIXME
 		wscfg, err := websocket.NewConfig(turl, origin)
 		if err != nil {
-			adm.Diag(err)
 			nc.Close()
+			err = &Error{turl, err.Error()}
+			adm.Diag(err)
 			return nil, err
 		}
 		ws, err := websocket.NewClient(wscfg, nc)
 		if err != nil {
+			nc.Close()
+			ws = nil
+			err = &Error{turl, err.Error()}
 			adm.Diag(err)
 		}
 		return ws, err
