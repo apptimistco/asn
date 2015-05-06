@@ -316,7 +316,7 @@ func (srv *Server) Listen() error {
 				return err
 			}
 			srv.AddListener(l)
-			srv.Diag("listening on", addr)
+			srv.Log("listening on", addr)
 			go l.listen(srv)
 		case "unix":
 			path := UrlPathSearch(lurl.Path)
@@ -331,7 +331,7 @@ func (srv *Server) Listen() error {
 			}
 			srv.AddListener(l)
 			l.clean = path
-			srv.Diag("listening on", addr)
+			srv.Log("listening on", addr)
 			go l.listen(srv)
 		case "ws":
 			l.ws = true
@@ -366,11 +366,11 @@ func (srv *Server) Listen() error {
 			*/
 			mux := http.NewServeMux()
 			mux.Handle(lurl.Path, websocket.Handler(f))
-			srv.Diag("listening on", lurl.String())
+			srv.Log("listening on", lurl.String())
 			go http.Serve(l.ln, mux)
 		default:
 			err := &Error{lurl.Scheme, "unsupported"}
-			srv.Diag(err)
+			srv.Log(err)
 			return err
 		}
 	}
