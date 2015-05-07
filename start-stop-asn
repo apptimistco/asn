@@ -29,7 +29,7 @@ SCRIPTNAME=/etc/init.d/$NAME
 # Read configuration variable file if it is present
 [ -r /etc/default/$NAME ] && . /etc/default/$NAME
 
-[ "$CONFIG" = "" ] && CONFIG="/etc/asn.yaml"
+[ "$CONFIG" = "" ] && CONFIG=/etc/$NAME.yaml
 [ "$CHRDIR" = "" ] && CHRDIR=/var/chroot/$NAME
 [ "$WORKDIR" = "" ] && WORKDIR=/var/lib/$NAME
 
