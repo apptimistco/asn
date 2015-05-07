@@ -116,11 +116,15 @@ func (c *Config) Parse(fn string) (err error) {
 	if err := yaml.Unmarshal(b, c); err != nil {
 		return err
 	}
-	if c.Name == "" {
-		c.Name = def.name
-	}
 	if c.Dir == "" {
-		c.Dir = def.dir
+		if c.Name != "" {
+			c.Dir = c.Name + ReposExt
+		} else {
+			c.Name = def.name
+			c.Dir = def.dir
+		}
+	} else if c.Name == "" {
+		c.Name = def.name
 	}
 	return nil
 }
