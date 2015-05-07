@@ -7,6 +7,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"io/ioutil"
 	"strings"
 )
 
@@ -43,14 +44,13 @@ func ObjDump(w io.Writer, r io.Reader) (err error) {
 		mark := new(Mark)
 		mark.ReadFrom(r)
 		fmt.Fprintln(w, mark)
-	case "", AsnMessages, AsnMessages + "/":
+	case AsnUser:
 		_, err = io.Copy(w, r)
 		w.Write(NL)
 	default:
 		var n int64
-		if n, err = io.Copy(w, r); err != nil {
-			fmt.Fprintln(w, "len:", n)
-		}
+		n, err = io.Copy(ioutil.Discard, r)
+		fmt.Fprintln(w, "len:", n)
 	}
 	return
 }
