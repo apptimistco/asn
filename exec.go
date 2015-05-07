@@ -542,13 +542,14 @@ func (ses *Ses) ExecGC(req Req, args ...string) interface{} {
 		ack     *PDU
 	)
 	for _, arg := range args {
-		if arg == "-v" || arg == "--verbose" {
+		switch {
+		case arg == "-v" || arg == "--verbose":
 			verbose = true
-		} else if arg == "-n" || arg == "--dry-run" {
+		case arg == "-n" || arg == "--dry-run":
 			dryrun = true
-		} else if strings.HasPrefix(arg, "@") {
+		case strings.HasPrefix(arg, "@"):
 			after, _ = ses.StripTime(arg)
-		} else {
+		case arg == "-help" || arg == "--help":
 			return &Usage{ExecGCUsage}
 		}
 	}
