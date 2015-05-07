@@ -347,7 +347,7 @@ with the given content.
     cat BLOB...
 
 The device may exec this command in the `established` state for the server to
-acknowledge with the contents (without header) of the named or referenced
+acknowledge with the contents (*without* headers) of the named or referenced
 blobs.
 
 ### clone ###
@@ -365,6 +365,12 @@ acknowledgment.
 The device may exec this command in `open`, `provisional` or `established`
 states.  The data of the server's positive acknowledgment has the joined,
 space separated list of arguments suffixed by a trailing newline.
+
+### dump ###
+    dump BLOB...
+
+The device may exec this command in the `established` state for the server to
+acknowledge with the concatenated named or referenced blobs *with* headers.
 
 ### fetch ###
     fetch BLOB...

@@ -29,6 +29,7 @@ const (
 	ExecCatUsage     = `cat BLOB...`
 	ExecCloneUsage   = `clone [NAME][@TIME]`
 	ExecEchoUsage    = `echo [STRING]...`
+	ExecDumpUsage    = `dump BLOB...`
 	ExecFetchUsage   = `fetch BLOB...`
 	ExecFilterUsage  = `filter FILTER [ARGS... --] [BLOB...]`
 	ExecGCUsage      = `gc [-v|--verbose] [-n|--dry-run] [@TIME]`
@@ -53,9 +54,11 @@ const (
   ` + ExecBlobUsage + `
 	Creates named blob.
   ` + ExecCatUsage + `
-	Returns the contents of the named blob.
+	Returns the contents of the named blobs *without* headers.
   ` + ExecCloneUsage + `
 	Replicate or update an object repository.
+  ` + ExecDumpUsage + `
+	Returns the concatenation of the named blobs *with* headers.
   ` + ExecEchoUsage + `
 	Returns space separated ARGS in the Ack data.
   ` + ExecFilterUsage + `
@@ -147,6 +150,8 @@ func (ses *Ses) Exec(req Req, in ReadWriteToer, args ...string) interface{} {
 		return ses.ExecCat(req, in, args[1:]...)
 	case "clone":
 		return ses.ExecClone(args[1:]...)
+	case "dump":
+		return ses.ExecDump(req, in, args[1:]...)
 	case "echo":
 		return strings.Join(args[1:], " ") + "\n"
 	case "fetch":
@@ -413,6 +418,31 @@ func (ses *Ses) execCloneLsAck(req Req, err error, ack *PDU) error {
 func (ses *Ses) execCloneFetchAck(req Req, err error, ack *PDU) error {
 	ses.asn.acker.UnMap(req)
 	return err
+}
+
+func (ses *Ses) ExecDump(req Req, r io.Reader, args ...string) interface{} {
+	if len(args) == 0 {
+		return &Usage{ExecDumpUsage}
+	}
+	ack, err := ses.asn.NewAckSuccessPDUFile(req)
+	if err != nil {
+		return err
+	}
+	err = ses.Blobber(func(fn string) error {
+		f, err := os.Open(fn)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		ack.ReadFrom(f)
+		return nil
+	}, r, args...)
+	if err != nil {
+		ack.Free()
+		ack = nil
+		return err
+	}
+	return ack
 }
 
 func (ses *Ses) ExecFetch(r io.Reader, args ...string) interface{} {
