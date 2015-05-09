@@ -1,16 +1,26 @@
 #!/bin/bash
 
-usage="${0##*/} thumb_NAME.svg full_NAME.svg"
+usage="${0##*/} [-config CONFIG] thumb_NAME.svg full_NAME.svg"
 
 : ${ASN_CONFIG:=test-adm}
-: ${ASN_URL:=ws://104.154.68.215:80/asn/test-gcloud.ws}
+
+if [[ "$1" =~ -*config=* ]] ; then
+	ASN_CONFIG=${1#*=}
+	shift 1
+elif [[ "$1" =~ -*config ]] ; then
+	ASN_CONFIG=$2
+	shift 2
+fi
+
+thumb=${1##*/}
+full=${2##*/}
 
 if [[ $# -ne 2 ||
-	${1%_*} != "thumb" ||
-	${1##*.} != svg ||
-	${2%_*} != "full" ||
-	${2##*.} != svg ||
-	${1#*thumb_} != ${2#*full_} ]]; then
+	${thumb%_*} != "thumb" ||
+	${thumb##*.} != svg ||
+	${full%_*} != "full" ||
+	${full##*.} != svg ||
+	${thumb#*thumb_} != ${full#*full_} ]]; then
 	echo $usage >/dev/stderr
 	exit 1
 fi
@@ -19,8 +29,7 @@ upload_news() {
 	newsA=${1##*/}
 	newsB=${newsA/_//}
 	newsC=${newsB//[[:space:]]/_}
-	gzip -c $1 |
-		./asn -config $ASN_CONFIG -server $ASN_URL blob /news/${newsC}.gz -
+	gzip -c $1 | ./asn -config $ASN_CONFIG blob /news/${newsC}.gz -
 }
 
 upload_news $1
