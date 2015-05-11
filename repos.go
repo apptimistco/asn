@@ -367,7 +367,8 @@ func (repos *Repos) Permission(owner, author *User, name string) error {
 	if bytes.Equal(author.key.Bytes(), repos.svc.Server.Pub.Encr.Bytes()) {
 		return nil
 	}
-	if name == "" || name == AsnMessages || name == AsnMessages+"/" {
+	if name == "" || name == AsnMessages || name == AsnMessages+"/" ||
+		strings.HasPrefix(name, "checkin/") {
 		return nil
 	}
 	if author.MayEdit(owner) {
