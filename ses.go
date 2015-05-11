@@ -112,7 +112,7 @@ func (ses *Ses) RxLogin(pdu *PDU) (err error) {
 		}
 		ses.asn.state = established
 	} else {
-		ses.asn.Log("failed login:", err)
+		ses.asn.Log("failed login:", &ses.Keys.Client.Login, err)
 		ses.asn.Ack(req, err)
 	}
 	return
