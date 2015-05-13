@@ -202,7 +202,9 @@ func (srv *Server) handler(conn net.Conn) {
 			user.logins -= 1
 		}
 		srv.rm(&ses)
-		srv.Log("disconnected", &ses.Keys.Client.Ephemeral)
+		ses.asn.Log("disconnected @", time.Now(),
+			"\n\tclient:", &ses.Keys.Client.Ephemeral,
+		)
 		ses.Reset()
 	}()
 	for {

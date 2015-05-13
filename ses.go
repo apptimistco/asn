@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"os"
+	"time"
 
 	"github.com/apptimistco/asn/debug"
 	"github.com/apptimistco/asn/debug/file"
@@ -100,11 +101,12 @@ func (ses *Ses) RxLogin(pdu *PDU) (err error) {
 		pub, sec, _ := NewRandomEncrKeys()
 		ses.asn.Ack(req, pub.Bytes(), nonce.Bytes())
 		ses.Keys.Server.Ephemeral = *pub
-		ses.asn.Log("login; client, server ephemeral; nonce:",
-			&ses.Keys.Client.Login,
-			&ses.Keys.Client.Ephemeral,
-			&ses.Keys.Server.Ephemeral,
-			&nonce)
+		ses.asn.Log("login @", time.Now(),
+			"\n\tuser: ", &ses.Keys.Client.Login,
+			"\n\tclient:", &ses.Keys.Client.Ephemeral,
+			"\n\tserver:", &ses.Keys.Server.Ephemeral,
+			"\n\tnonce: ", &nonce,
+		)
 		ses.asn.Set(NewBox(2, &nonce, &ses.Keys.Client.Ephemeral,
 			&ses.Keys.Server.Ephemeral, sec))
 		if ses.user != nil {
