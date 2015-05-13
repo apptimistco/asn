@@ -766,6 +766,34 @@ func (ses *Ses) ExecRM(r io.Reader, args ...string) interface{} {
 	if len(args) < 1 {
 		return &Usage{ExecRMUsage}
 	}
+	if ses.user == ses.asn.repos.users.User(ses.cfg.Keys.Admin.Pub.Encr) {
+		for i := 0; i < len(args); {
+			if args[i][0] == '~' &&
+				strings.Index(args[i], "/") < 0 {
+				s := args[i][1:]
+				u := ses.asn.repos.users.UserString(s)
+				if u != nil {
+					if i+1 < len(args) {
+						args = append(args[:i],
+							args[i+1:]...)
+					} else {
+						args = args[:i]
+					}
+					s = u.FullString()
+					os.RemoveAll(ses.asn.repos.Expand(s))
+					ses.asn.repos.users.RM(u)
+					ses.asn.Log("removed user:", s)
+				} else {
+					return &Error{s, "no such user"}
+				}
+			} else {
+				i += 1
+			}
+		}
+	}
+	if len(args) < 1 {
+		return nil
+	}
 	err := ses.Blobber(func(fn string) error {
 		fmt.Fprintln(buf, ses.asn.repos.DePrefix(fn))
 		return nil
@@ -775,6 +803,7 @@ func (ses *Ses) ExecRM(r io.Reader, args ...string) interface{} {
 	}
 	sum, err := ses.Store(owner, ses.user, AsnRemovals, buf)
 	if err != nil {
+		ses.asn.Log("RM Store removal:", err)
 		return err
 	}
 	return sum
@@ -801,7 +830,12 @@ func (ses *Ses) ExecUsers(args ...string) interface{} {
 	if len(args) != 0 {
 		return &Usage{ExecUsersUsage}
 	}
-	return ses.asn.repos.users.LS()
+	b := &bytes.Buffer{}
+	ses.asn.repos.users.ForEachUser(func(user *User) error {
+		fmt.Fprintln(b, user.String())
+		return nil
+	})
+	return b
 }
 
 func (ses *Ses) ExecVouch(args ...string) interface{} {

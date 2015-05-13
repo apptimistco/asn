@@ -13,7 +13,6 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -656,31 +655,13 @@ func (repos *Repos) Store(x Sender, v Version, blob *Blob,
 
 // UnsafeNewUser will panic on error so the calling function must recover.
 func (repos *Repos) UnsafeNewUser(v interface{}) (user *User) {
-	var i int
-	repos.users.Lock()
-	defer repos.users.Unlock()
-	n := len(repos.users.l)
 	switch t := v.(type) {
 	case string:
-		i = sort.Search(n, func(i int) bool {
-			return repos.users.l[i].String() >= t
-		})
-		user = NewUserString(t)
+		user = repos.users.NewUserString(t)
 	case *PubEncr:
-		i = sort.Search(n, func(i int) bool {
-			return bytes.Compare(repos.users.l[i].key.Bytes(),
-				t.Bytes()) >= 0
-		})
-		user = NewUserKey(t)
+		user = repos.users.NewUserKey(t)
 	default:
 		panic(os.ErrInvalid)
-	}
-	if i == n {
-		repos.users.l = append(repos.users.l, user)
-	} else {
-		repos.users.l = append(repos.users.l[:i],
-			append([]*User{user},
-				(repos.users.l[i:])...)...)
 	}
 	dn := repos.Join(user.dn)
 	if _, err := os.Stat(dn); err != nil {

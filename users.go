@@ -9,7 +9,6 @@ import (
 	"os"
 	"sort"
 
-	"github.com/apptimistco/asn/debug"
 	"github.com/apptimistco/asn/debug/mutex"
 )
 
@@ -19,8 +18,6 @@ type Users struct {
 }
 
 func (users *Users) ForEachUser(f func(*User) error) error {
-	users.Fixme(debug.Depth(2), "lock")
-	defer users.Fixme(debug.Depth(2), "unlock")
 	users.Lock()
 	defer users.Unlock()
 	for _, u := range users.l {
@@ -40,25 +37,31 @@ func (users *Users) ForEachLoggedInUser(f func(*User) error) error {
 	})
 }
 
-// LS repos user table
-func (users *Users) LS() []byte {
+func (users *Users) insert(user *User) {
 	users.Lock()
 	defer users.Unlock()
 	n := len(users.l)
-	out := make([]byte, 0, n*((PubEncrSz*2)+1))
-	for _, user := range users.l {
-		out = append(out, []byte(user.String())...)
-		out = append(out, '\n')
+	i := sort.Search(n, func(i int) bool {
+		return users.l[i].String() >= user.String()
+	})
+	if i == n {
+		users.l = append(users.l, user)
+	} else {
+		users.l = append(users.l[:i], append([]*User{user},
+			(users.l[i:])...)...)
 	}
-	return out
+}
+
+func (users *Users) NewUserKey(key *PubEncr) *User {
+	u := NewUserKey(key)
+	users.insert(u)
+	return u
 }
 
 func (users *Users) NewUserString(keystr string) *User {
-	users.Lock()
-	defer users.Unlock()
-	user := NewUserString(keystr)
-	users.l = append(users.l, user)
-	return user
+	u := NewUserString(keystr)
+	users.insert(u)
+	return u
 }
 
 func (users *Users) Reset() {
@@ -69,6 +72,22 @@ func (users *Users) Reset() {
 		users.l[i] = nil
 	}
 	users.l = nil
+}
+
+func (users *Users) RM(user *User) {
+	users.Lock()
+	defer users.Unlock()
+	for i, u := range users.l {
+		if u == user {
+			u.Reset()
+			if i+1 < len(users.l) {
+				users.l = append(users.l[:i], users.l[i+1:]...)
+			} else {
+				users.l = users.l[:i]
+			}
+			return
+		}
+	}
 }
 
 func (users *Users) Set(v interface{}) error {
@@ -83,7 +102,6 @@ func (users *Users) Set(v interface{}) error {
 
 // Binary search for longest matching key.
 func (users *Users) User(key *PubEncr) (user *User) {
-	users.Fixme(debug.Depth(2), "User")
 	users.Lock()
 	defer users.Unlock()
 	n := len(users.l)
@@ -98,8 +116,6 @@ func (users *Users) User(key *PubEncr) (user *User) {
 
 // Binary search for longest matching key-string.
 func (users *Users) UserString(ks string) (user *User) {
-	users.Fixme(debug.Depth(2), "lock")
-	defer users.Fixme(debug.Depth(2), "unlock")
 	users.Lock()
 	defer users.Unlock()
 	n := len(users.l)
