@@ -289,9 +289,8 @@ func (asn *asn) Version() Version { return asn.version }
 
 // Write full buffer unless preempted by Closed state.
 func (asn *asn) Write(b []byte) (n int, err error) {
-	const dl = 200 * time.Millisecond
 	for i := 0; n < len(b) && err == nil; n += i {
-		asn.conn.SetWriteDeadline(time.Now().Add(dl))
+		asn.conn.SetWriteDeadline(time.Time{})
 		i, err = asn.conn.Write(b[n:])
 		if asn.IsClosed() {
 			err = io.EOF
