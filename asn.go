@@ -51,7 +51,7 @@ type asn struct {
 		going bool
 	}
 	tx struct {
-		ch    chan pdubox
+		ch    chan uint16
 		err   error
 		black []byte
 		red   []byte
@@ -66,15 +66,27 @@ type asn struct {
 }
 
 // Pair box and pdu to support reset of box after Ack of Login
-type pdubox struct {
+type pduX struct {
 	pdu *PDU
 	box *Box
+}
+
+const nPduXes = uint16(256)
+
+var pduXes [nPduXes]pduX
+var pduXi chan uint16
+
+func init() {
+	pduXi = make(chan uint16, nPduXes)
+	for i := uint16(0); i < nPduXes; i++ {
+		pduXi <- i
+	}
 }
 
 func (asn *asn) Init() {
 	asn.version = Latest
 	asn.rx.ch = make(chan *PDU, 4)
-	asn.tx.ch = make(chan pdubox, 4)
+	asn.tx.ch = make(chan uint16, 4)
 	asn.rx.going = false
 	asn.tx.going = false
 	asn.rx.black = make([]byte, 0, MaxSegSz)
@@ -169,30 +181,35 @@ func (asn *asn) gotx() {
 		asn.tx.going = false
 	}()
 	for {
-		pb, open := <-asn.tx.ch
+		i, open := <-asn.tx.ch
 		if !open {
 			asn.Diag("quit pdutx")
 			runtime.Goexit()
 		}
-		err := pb.pdu.Open()
+		pdu := pduXes[i].pdu
+		box := pduXes[i].box
+		pduXes[i].pdu = nil
+		pduXes[i].box = nil
+		pduXi <- i
+		err := pdu.Open()
 		if err != nil {
 			panic(err)
 		}
-		for n := pb.pdu.Len(); n > 0; n = pb.pdu.Len() {
+		for n := pdu.Len(); n > 0; n = pdu.Len() {
 			if n > maxBlack {
 				n = maxBlack
 			}
 			asn.tx.black = asn.tx.black[:n]
-			if _, err = pb.pdu.Read(asn.tx.black); err != nil {
+			if _, err = pdu.Read(asn.tx.black); err != nil {
 				panic(err)
 			}
 			asn.tx.red = asn.tx.red[:2]
-			asn.tx.red, err = pb.box.Seal(asn.tx.red, asn.tx.black)
+			asn.tx.red, err = box.Seal(asn.tx.red, asn.tx.black)
 			if err != nil {
 				panic(err)
 			}
 			l := uint16(len(asn.tx.red[2:]))
-			if pb.pdu.Len() > 0 {
+			if pdu.Len() > 0 {
 				l |= MoreFlag
 			}
 			binary.BigEndian.PutUint16(asn.tx.red[:2], l)
@@ -200,9 +217,8 @@ func (asn *asn) gotx() {
 				panic(err)
 			}
 		}
-		pb.pdu.Free()
-		pb.pdu = nil
-		pb.box = nil
+		pdu.Free()
+		pdu = nil
 	}
 }
 
@@ -281,7 +297,10 @@ func (asn *asn) Tx(pdu *PDU) {
 		asn.Diag(debug.Depth(2), "tried to Tx on closed asn")
 		return
 	}
-	asn.tx.ch <- pdubox{pdu: pdu, box: asn.box}
+	i := <-pduXi
+	pduXes[i].pdu = pdu
+	pduXes[i].box = asn.box
+	asn.tx.ch <- i
 }
 
 // Version steps down to the peer.
