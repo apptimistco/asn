@@ -282,7 +282,7 @@ func (ses *Ses) ExecBlob(in ReadWriteToer, args ...string) interface{} {
 	if err != nil {
 		return err
 	}
-	if name == AsnID {
+	if strings.HasSuffix(name, AsnID) {
 		ses.asn.Set(ses.user.cache.ID())
 	}
 	return sum
