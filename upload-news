@@ -4,7 +4,7 @@ usage="${0##*/} [-config CONFIG] thumb_NAME.svg full_NAME.svg"
 
 : ${ASN_CONFIG:=test-adm}
 
-if [[ "$1" =~ -*config=* ]] ; then
+if [[ "$1" =~ -*config=.* ]] ; then
 	ASN_CONFIG=${1#*=}
 	shift 1
 elif [[ "$1" =~ -*config ]] ; then
