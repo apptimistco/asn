@@ -56,7 +56,11 @@ func (c Cache) Editors() *PubEncrList {
 }
 
 func (c Cache) ID() string {
-	return c.CacheBuffer(AsnID).Buffer.String()
+	b := c.CacheBuffer(AsnID).Buffer
+	if b == nil {
+		return ""
+	}
+	return b.String()
 }
 
 func (c Cache) Invites() *PubEncrList {
