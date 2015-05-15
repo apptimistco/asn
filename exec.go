@@ -137,6 +137,7 @@ func (ses *Ses) GoExec(req Req, pdu *PDU, args ...string) {
 
 func (ses *Ses) Exec(req Req, in ReadWriteToer, args ...string) interface{} {
 	ses.asn.Trace(debug.Id(ExecReqId), "rx", req, "exec", args)
+	ses.asn.Log(req, "exec", args)
 	switch args[0] {
 	case "exec-help", "help":
 		return ExecUsage
