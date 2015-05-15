@@ -6,8 +6,8 @@ package main
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"io"
-	"strconv"
 	"sync"
 )
 
@@ -40,7 +40,7 @@ func (req *Req) ReadFrom(r io.Reader) (n int64, err error) {
 }
 
 func (req Req) String() string {
-	return strconv.QuoteToASCII(string(req[:]))
+	return hex.EncodeToString(req[:])
 }
 
 func (req Req) WriteTo(w io.Writer) (n int64, err error) {
