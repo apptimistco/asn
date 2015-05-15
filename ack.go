@@ -108,6 +108,7 @@ func (asn *asn) Ack(req Req, argv ...interface{}) {
 	(NBOWriter{ack}).WriteNBO(asn.time.out)
 	if err != nil {
 		asn.Trace(debug.Id(AckReqId), "tx", req, "nack", err)
+		asn.Log(req, "nack", err)
 		ErrFromError(err).Version(v).WriteTo(ack)
 		if len(argv) > 0 {
 			AckOut(ack, argv...)
@@ -116,6 +117,7 @@ func (asn *asn) Ack(req Req, argv ...interface{}) {
 		}
 	} else {
 		asn.Trace(debug.Id(AckReqId), "tx", req, "ack")
+		asn.Log(req, "ack")
 		Success.Version(v).WriteTo(ack)
 		AckOut(ack, argv...)
 	}
@@ -182,6 +184,7 @@ func (asn *asn) NewAckSuccessPDUFile(req Req) (ack *PDU, err error) {
 	req.WriteTo(ack)
 	(NBOWriter{ack}).WriteNBO(asn.time.out)
 	Success.Version(v).WriteTo(ack)
+	asn.Log(req, "ack")
 	return
 }
 
