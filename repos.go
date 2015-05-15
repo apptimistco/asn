@@ -617,7 +617,9 @@ func (repos *Repos) Store(x Sender, v Version, blob *Blob,
 		}
 		syscall.Unlink(sumFN)
 	case blob.Name == AsnID:
-		err = ReadFromFile(owner.cache.CacheBuffer(blob.Name), f)
+		id := owner.cache.CacheBuffer(blob.Name)
+		id.Reset()
+		err = ReadFromFile(id, f)
 		if err == nil {
 			x.Send(Mirrors, f)
 			LN(sumFN, repos.Join(owner.Join(blob.Name)))
