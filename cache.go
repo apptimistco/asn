@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bytes"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ const (
 	AsnAuthor      = "asn/author"
 	AsnBridge      = "asn/bridge"
 	AsnEditors     = "asn/editors"
+	AsnID          = "asn/user_id"
 	AsnInvites     = "asn/invites"
 	AsnMark        = "asn/mark"
 	AsnMessages    = "asn/messages"
@@ -44,8 +46,17 @@ func (c Cache) Author() *PubEncr {
 	return c.PubEncr(AsnAuthor)
 }
 
+func (c Cache) CacheBuffer(kw string) CacheBuffer {
+	l, _ := c[kw].Cacher.(CacheBuffer)
+	return l
+}
+
 func (c Cache) Editors() *PubEncrList {
 	return c.PubEncrList(AsnEditors)
+}
+
+func (c Cache) ID() string {
+	return c.CacheBuffer(AsnID).Buffer.String()
 }
 
 func (c Cache) Invites() *PubEncrList {
@@ -54,6 +65,9 @@ func (c Cache) Invites() *PubEncrList {
 
 func (c Cache) Load(dn string) error {
 	for fn, e := range c {
+		if fn == AsnID {
+			e.Cacher = NewCacheBuffer()
+		}
 		pn := filepath.Join(dn, fn)
 		fi, err := os.Stat(pn)
 		if err != nil {
@@ -152,4 +166,37 @@ func (e *CacheEntry) Set(v interface{}) error {
 
 func (e *CacheEntry) String() string {
 	return e.Cacher.String()
+}
+
+type CacheBuffer struct {
+	*bytes.Buffer
+}
+
+func NewCacheBuffer() (c CacheBuffer) {
+	c.Buffer = new(bytes.Buffer)
+	return
+}
+
+func (c CacheBuffer) Has(v interface{}) bool {
+	switch t := v.(type) {
+	case []byte:
+		return bytes.Equal(t, c.Bytes())
+	case string:
+		return t == c.String()
+	}
+	return false
+}
+
+func (c CacheBuffer) Set(v interface{}) error {
+	switch t := v.(type) {
+	case []byte:
+		c.Reset()
+		_, err := c.Write(t)
+		return err
+	case string:
+		c.Reset()
+		_, err := c.Write([]byte(t))
+		return err
+	}
+	return os.ErrInvalid
 }

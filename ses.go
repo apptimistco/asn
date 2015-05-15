@@ -101,17 +101,20 @@ func (ses *Ses) RxLogin(pdu *PDU) (err error) {
 		pub, sec, _ := NewRandomEncrKeys()
 		ses.asn.Ack(req, pub.Bytes(), nonce.Bytes())
 		ses.Keys.Server.Ephemeral = *pub
+		ses.asn.Set(NewBox(2, &nonce, &ses.Keys.Client.Ephemeral,
+			&ses.Keys.Server.Ephemeral, sec))
+		if ses.user != nil {
+			ses.user.logins += 1
+			if id := ses.user.cache.ID(); id != "" {
+				ses.asn.Set(id)
+			}
+		}
 		ses.asn.Log("login @", time.Now(),
 			"\n\tuser: ", &ses.Keys.Client.Login,
 			"\n\tclient:", &ses.Keys.Client.Ephemeral,
 			"\n\tserver:", &ses.Keys.Server.Ephemeral,
 			"\n\tnonce: ", &nonce,
 		)
-		ses.asn.Set(NewBox(2, &nonce, &ses.Keys.Client.Ephemeral,
-			&ses.Keys.Server.Ephemeral, sec))
-		if ses.user != nil {
-			ses.user.logins += 1
-		}
 		ses.asn.state = established
 	} else {
 		ses.asn.Log("failed login:", &ses.Keys.Client.Login, err)

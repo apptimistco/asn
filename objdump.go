@@ -40,6 +40,10 @@ func ObjDump(w io.Writer, r io.Reader) (err error) {
 		author := new(PubEncr)
 		author.ReadFrom(r)
 		fmt.Fprintln(w, "author:", author)
+	case AsnID:
+		id := NewCacheBuffer()
+		id.ReadFrom(r)
+		fmt.Fprintln(w, "id:", id)
 	case AsnMark:
 		mark := new(Mark)
 		mark.ReadFrom(r)
